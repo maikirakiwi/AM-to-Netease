@@ -67,3 +67,15 @@ def test_search_queries_are_bounded_and_keep_version_labels():
         'Song (feat. Guest) [TV size] Character(CV:Actor) & Other',
         'Song [TV size] Actor', 'Song [TV size]']
     assert search_queries(Track('a', 'Song', 'Artist')) == ['Song Artist', 'Song']
+
+
+def test_qi_yue_qi_ri_qing_prefers_matching_album_over_first_compilation_result():
+    source = Track('1442719419', '七月七日晴', '许慧欣', '美丽的爱情', 244973)
+    candidates = [
+        Candidate('307780', '七月七日晴', '许慧欣', '万中选一', 243893),
+        Candidate('1900168811', '七月七日晴', '许慧欣', '心碎的声音', 243893),
+        Candidate('307825', '七月七日晴', '许慧欣', '美丽的爱情', 244973),
+    ]
+    match, ranked = choose(source, candidates)
+    assert match.id == '307825'
+    assert ranked[0].score == 1.0

@@ -42,6 +42,6 @@ The dashboard has no built-in login. Restrict its Coolify domain to a trusted ne
 Do not delete or replace the `app-data` volume. It contains:
 
 - `settings.json`, including provider sessions.
-- `sync.sqlite3`, including mappings and run history.
+- `data/sync.sqlite3`, including mappings and run history (container path `/data/data/sync.sqlite3`).
 
 The service health endpoint is available at `/healthz`.

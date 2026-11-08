@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import base64
 import json
+import time
 
 import re
 from typing import Any, Protocol
@@ -263,9 +264,30 @@ class PyncmClient:
         return [self._track(song) for song in songs]
 
     def search(self, query: str) -> list[Candidate]:
-        payload = self.search_api.GetSearchResult(query, limit=30, session=self._session)
-        songs = payload.get("result", {}).get("songs", [])
-        return [self._track(song) for song in songs]
+        for attempt in range(2):
+            payload = self.search_api.GetSearchResult(query, limit=30, session=self._session)
+            if not isinstance(payload, dict):
+                raise RuntimeError("Netease search returned an invalid response")
+            code = payload.get("code")
+            # The fork's decrypted overseas responses omit code and set abroad=True.
+            if code != 200 and not (code is None and payload.get("abroad") is True):
+                if attempt == 0 and code in {405, 429, 500, 502, 503, 504}:
+                    logger.warning("Netease search rejected; retrying: query=%r code=%s", query, code)
+                    time.sleep(1)
+                    continue
+                raise RuntimeError(f"Netease search failed (code={code}); query={query!r}")
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                raise RuntimeError(f"Netease search returned no valid result; query={query!r}")
+            songs = result.get("songs", [] if result.get("songCount") == 0 else None)
+            if not isinstance(songs, list) or any(not isinstance(song, dict) or song.get("id") is None for song in songs):
+                raise RuntimeError(f"Netease search returned invalid songs; query={query!r}")
+            logger.info("Netease search: query=%r code=%s candidates=%s attempt=%s", query, code, len(songs), attempt + 1)
+            if not songs and attempt == 0:
+                logger.warning("Netease search returned zero candidates; retrying: query=%r", query)
+                time.sleep(1)
+                continue
+            return [self._track(song) for song in songs]
 
     def song(self, netease_id: str) -> Candidate:
         payload = self.track_api.GetTrackDetail([netease_id], session=self._session)
