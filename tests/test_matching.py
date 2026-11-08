@@ -1,0 +1,20 @@
+from music_sync.matching import choose, normalize
+from music_sync.models import Candidate, Track
+
+
+def test_normalize_handles_unicode_and_punctuation():
+    assert normalize(" Ｊａｚｚ！ ") == "jazz"
+
+
+def test_choose_accepts_unique_close_match():
+    source = Track("a", "Song", "Artist", "Album", 180000)
+    match, ranked = choose(source, [Candidate("n", "Song", "Artist", "Album", 180500)])
+    assert match and match.id == "n"
+    assert ranked[0].score >= 0.9
+
+
+def test_choose_rejects_ambiguous_matches():
+    source = Track("a", "Song", "Artist", "Album", 180000)
+    candidates = [Candidate("1", "Song", "Artist", "Album", 180000), Candidate("2", "Song", "Artist", "Album", 180000)]
+    match, _ = choose(source, candidates)
+    assert match is None
