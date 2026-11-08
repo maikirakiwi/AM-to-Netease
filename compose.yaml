@@ -2,8 +2,8 @@ services:
   app:
     build: .
     restart: unless-stopped
-    expose:
-      - "8008"
+    ports:
+      - "127.0.0.1:8008:8008"
     volumes:
       - app-data:/data
     working_dir: /data
