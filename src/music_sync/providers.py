@@ -141,48 +141,75 @@ class PyncmClient:
     def __init__(self, session: dict[str, Any] | None = None) -> None:
         try:
             import pyncm  # type: ignore
-            from pyncm.apis import playlist as playlist_api, search as search_api, track as track_api
+            from pyncm.apis import playlist as playlist_api, cloudsearch as search_api, track as track_api
         except ImportError as exc:  # pragma: no cover - exercised only without optional runtime deps
-            raise RuntimeError("pyncm is required for Netease access") from exc
+            raise RuntimeError(f"Could not import sakarie9/pyncm: {exc}") from exc
         self.pyncm = pyncm
         self.playlist_api = playlist_api
         self.search_api = search_api
         self.track_api = track_api
+        self._session = pyncm.Session()
         if session:
-            pyncm.load_cookie(session)
+            self._session.load(session)
 
     def session(self) -> dict[str, Any]:
-        return self.pyncm.dump_cookie()
+        return self._session.dump()
 
     def login_qr(self) -> dict[str, Any]:
         """Run pyncm's interactive QR flow and return the persisted cookie/session."""
         from pyncm.apis import login as login_api  # type: ignore
-        function = getattr(login_api, "login_qr", None)
-        if function is None:
-            raise RuntimeError("installed pyncm version does not expose login_qr")
-        function()
-        return self.session()
+        import time
+        import qrcode
+
+        unikey = login_api.LoginQrcodeUnikey(session=self._session)["unikey"]
+        url = login_api.GetLoginQRCodeUrl(unikey, session=self._session)
+        qr = qrcode.QRCode()
+        qr.add_data(url)
+        qr.print_ascii(invert=True)
+        print("Scan the QR code with the Netease Music app and confirm login.", flush=True)
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            response = login_api.LoginQrcodeCheck(unikey, session=self._session)
+            code = response.get("code")
+            if code == 803:
+                status = login_api.GetCurrentLoginStatus(session=self._session)
+                self.pyncm.WriteLoginInfo(status, self._session)
+                return self.session()
+            if code not in (801, 802):
+                raise RuntimeError(f"Netease QR login failed ({code}): {response.get('message', 'QR expired or rejected')}")
+            time.sleep(2)
+        raise TimeoutError("Netease QR login timed out; run setup again for a new QR code")
 
     def playlist_tracks(self, playlist: str) -> list[Candidate]:
-        payload = self.playlist_api.get_playlist_detail(playlist_id(playlist))
-        songs = payload.get("playlist", payload).get("tracks", [])
+        payload = self.playlist_api.GetPlaylistInfo(playlist_id(playlist), session=self._session)
+        ids = [item["id"] for item in payload["playlist"]["trackIds"]]
+        songs = []
+        for offset in range(0, len(ids), 500):
+            songs.extend(self.track_api.GetTrackDetail(ids[offset:offset + 500], session=self._session)["songs"])
         return [self._track(song) for song in songs]
 
     def search(self, query: str) -> list[Candidate]:
-        payload = self.search_api.cloudsearch(query, limit=30)
+        payload = self.search_api.GetSearchResult(query, limit=30, session=self._session)
         songs = payload.get("result", {}).get("songs", [])
         return [self._track(song) for song in songs]
 
     def song(self, netease_id: str) -> Candidate:
-        payload = self.track_api.get_track_detail([netease_id])
+        payload = self.track_api.GetTrackDetail([netease_id], session=self._session)
         songs = payload.get("songs", payload)
         return self._track(songs[0])
 
     def add(self, playlist: str, netease_id: str) -> None:
-        self.playlist_api.add_track_to_playlist(playlist_id(playlist), netease_id)
+        self._modify(playlist, netease_id, "add")
 
     def remove(self, playlist: str, netease_id: str) -> None:
-        self.playlist_api.delete_track_from_playlist(playlist_id(playlist), netease_id)
+        self._modify(playlist, netease_id, "del")
+
+    def _modify(self, playlist: str, netease_id: str, operation: str) -> None:
+        response = self.playlist_api.SetManipulatePlaylistTracks(
+            [netease_id], playlist_id(playlist), op=operation, session=self._session
+        )
+        if response.get("code") != 200:
+            raise RuntimeError(f"Netease playlist {operation} failed: {response.get('message', response.get('code'))}")
 
     @staticmethod
     def _track(song: dict[str, Any]) -> Candidate:
