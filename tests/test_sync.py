@@ -289,3 +289,28 @@ def test_removed_source_mapping_is_removed_without_deleting_shared_destination(t
     assert service.db.mapping('pair', 'removed-source') is None
     assert service.db.mapping('pair', 'apple-1')['dest_id'] == 'netease-1'
     assert {t.id for t in netease.items} == {'netease-1'}
+
+
+def test_multiple_lyric_matches_choose_highest_metadata_score_at_least_point_nine(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    apple.lyrics = lambda _: 'First line\nSecond line\nThird line'
+    netease.lyrics = lambda song: '[00:01]prefix Second line suffix' if song != 'nonmatching' else 'Unrelated lyrics'
+    service = SyncService(SyncDatabase(tmp_path / 'lyric-tie.sqlite3'), apple, netease)
+    for first_score, second_score, expected in [
+        (0.91, 0.89, 'first'),
+        (0.89, 0.95, 'second'),
+        (0.95, 0.91, 'first'),
+        (0.90, 0.89, 'first'),
+        (0.90, 0.90, 'first'),
+        (0.89, 0.88, None),
+        (0.900001, 0.90, 'first'),
+    ]:
+        candidates = [Candidate('nonmatching', 'Other', 'Artist', score=0.99),
+                      Candidate('first', 'Song', 'Artist', score=first_score),
+                      Candidate('second', 'Song', 'Artist', score=second_score)]
+        match, reason = service._match_lyrics(apple.source, candidates)
+        assert (match.id if match else None) == expected
+        if expected:
+            assert reason == ''
+        else:
+            assert 'multiple candidates' in reason
