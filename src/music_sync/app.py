@@ -167,6 +167,7 @@ def apple_setup() -> HTMLResponse:
     <button id='authorize'>Authorize Apple Music</button><p id='status'></p>
     <script>
       document.addEventListener('musickitloaded', async () => {{
+        try {{
         const music = await MusicKit.configure({{ developerToken: {token_json}, app: {{ name: 'Apple-Netease Sync', build: '0.1.0' }} }});
         document.getElementById('authorize').onclick = async () => {{
           document.getElementById('status').textContent = 'Waiting for Apple Music authorization…';
@@ -176,6 +177,9 @@ def apple_setup() -> HTMLResponse:
             document.getElementById('status').textContent = 'Authorized and verified. Return to the dashboard.';
           }} catch (error) {{ document.getElementById('status').textContent = String(error); }}
         }};
+        }} catch (error) {{
+          document.getElementById('status').textContent = 'MusicKit initialization failed: ' + String(error) + '. Check the developer token and its allowed website origin. Apple web-player tokens cannot authorize on this dashboard domain; use your own developer token or the manual token fallback.';
+        }}
       }});
     </script>
     <script src='https://js-cdn.music.apple.com/musickit/v3/musickit.js'></script>
@@ -188,7 +192,7 @@ def apple_setup() -> HTMLResponse:
 def save_apple_token(user_token: str = Form(...)) -> RedirectResponse:
     data = runtime.settings.load()
     try:
-        AppleMusicClient(data["apple"]["developer_token"], user_token.strip())._get("/v1/me/storefronts")
+        AppleMusicClient(data["apple"]["developer_token"], user_token.strip()).storefront()
     except Exception as exc:
         logger.exception("Apple Music authorization verification failed")
         raise HTTPException(400, str(exc)) from exc

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import base64
+import json
 
 import re
 from typing import Any, Protocol
@@ -78,6 +80,15 @@ class AppleMusicClient:
         self.developer_token = developer_token
         self.user_token = user_token
         self.timeout = timeout
+        self.origin = None
+        try:
+            payload = developer_token.split(".")[1]
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+            # Apple's web-player token requires its origin even for server-side requests.
+            if claims.get("iss") == "AMPWebPlay" and "apple.com" in claims.get("root_https_origin", []):
+                self.origin = "https://music.apple.com"
+        except (IndexError, ValueError, TypeError):
+            pass
 
     def _get(self, path: str, storefront: str | None = None, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if path.startswith("/v1/me"):
@@ -85,6 +96,8 @@ class AppleMusicClient:
         else:
             url = f"https://api.music.apple.com/v1/catalog/{storefront or 'us'}{path}"
         headers = {"Authorization": f"Bearer {self.developer_token}", "Music-User-Token": self.user_token}
+        if self.origin:
+            headers.update({"Origin": self.origin, "Referer": self.origin + "/"})
         if httpx is not None:
             response = httpx.get(url, headers=headers, params=params, timeout=self.timeout)
             if response.status_code in (401, 403):
@@ -104,9 +117,15 @@ class AppleMusicClient:
             import json
             return json.load(response)
 
+    def storefront(self) -> str:
+        data = self._get("/v1/me/storefront").get("data", [])
+        if not data or not data[0].get("id"):
+            raise RuntimeError("Apple Music returned no storefront country code; authorize Apple Music again")
+        return data[0]["id"]
+
     def tracks(self, playlist: str) -> list[Track]:
         playlist_value = playlist_id(playlist)
-        storefront = self._get("/v1/me/storefronts").get("data", [{"id": "us"}])[0]["id"]
+        storefront = self.storefront()
         if playlist_value.startswith("pl.u-"):
             path = f"/v1/me/library/playlists/{playlist_value}/tracks"
             payload = self._get(path)
