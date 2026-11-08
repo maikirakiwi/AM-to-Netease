@@ -118,3 +118,18 @@ def test_lyrics_retries_original_source_storefront(monkeypatch):
     monkeypatch.setattr(client, '_get', get)
     assert client.lyrics(Track('123', 'Song', 'Artist', storefront='cn', raw={'storefront': 'us'})) == 'First line'
     assert calls == ['cn', 'cn', 'us']
+
+
+def test_missing_audio_locale_is_explicitly_requested_from_media_api(monkeypatch):
+    from music_sync.models import Track
+    calls = []
+    def get(url, **kwargs):
+        calls.append(url)
+        assert url == 'https://amp-api.music.apple.com/v1/catalog/us/songs/123'
+        assert kwargs['params'] == {'fields': 'audioLocale'}
+        return httpx.Response(200, request=httpx.Request('GET', url), json={'data': [{'attributes': {'audioLocale': 'ja'}}]})
+    monkeypatch.setattr(httpx, 'get', get)
+    client = AppleMusicClient('developer', 'user')
+    assert client.audio_locale(Track('i.library', 'Song', 'Artist', raw={'catalog_id': '123', 'storefront': 'us'})) == 'ja'
+    assert client.audio_locale(Track('123', 'Song', 'Artist', audio_locale='ja')) == 'ja'
+    assert len(calls) == 1

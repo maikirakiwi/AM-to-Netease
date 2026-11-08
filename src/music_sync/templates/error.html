@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<div class="page-heading"><div><h1>{{ title }}</h1><p>The operation could not be completed.</p></div></div><div class="notice warning" role="alert">{{ icon('alert') }}<span>{{ message }}</span></div><a class="button" href="{{ back_url or '/' }}">Return to dashboard</a>{% endblock %}

@@ -56,6 +56,16 @@ class SyncDatabase:
                 );
                 """
             )
+            columns = {row[1] for row in self.conn.execute("PRAGMA table_info(sync_runs)")}
+            for name, declaration in {"total": "INTEGER", "processed": "INTEGER NOT NULL DEFAULT 0", "current_source_title": "TEXT", "cancel_requested": "INTEGER NOT NULL DEFAULT 0"}.items():
+                if name not in columns:
+                    self.conn.execute(f"ALTER TABLE sync_runs ADD COLUMN {name} {declaration}")
+            mapping_columns = {row[1] for row in self.conn.execute("PRAGMA table_info(song_mappings)")}
+            for name in ("dest_json", "match_method"):
+                if name not in mapping_columns:
+                    self.conn.execute(f"ALTER TABLE song_mappings ADD COLUMN {name} TEXT")
+            self.conn.execute("CREATE TABLE IF NOT EXISTS run_changes (id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, action TEXT NOT NULL, target_id TEXT NOT NULL, previous_json TEXT, undone INTEGER NOT NULL DEFAULT 0, UNIQUE(run_id, action, target_id))")
+            self.conn.execute("UPDATE schema_version SET version = 3")
 
     def start_run(self, pair_id: str) -> int:
         with self.lock, self.conn:
@@ -96,7 +106,7 @@ class SyncDatabase:
         with self.lock:
             return self.conn.execute("SELECT * FROM song_mappings WHERE pair_id = ? AND source_id = ?", (pair_id, source_id)).fetchone()
 
-    def save_mapping(self, pair_id: str, source_id: str, dest_id: str | None, state: str, manual: bool = False, error: str | None = None, candidates: list[dict[str, Any]] | None = None) -> None:
+    def save_mapping(self, pair_id: str, source_id: str, dest_id: str | None, state: str, manual: bool = False, error: str | None = None, candidates: list[dict[str, Any]] | None = None, destination: dict | None = None, match_method: str | None = None) -> None:
         stamp = now_iso()
         with self.lock, self.conn:
             self.conn.execute(
@@ -107,6 +117,42 @@ class SyncDatabase:
                    candidates_json=excluded.candidates_json, updated_at=excluded.updated_at""",
                 (pair_id, source_id, dest_id, state, int(manual), error, json.dumps(candidates or []), stamp, stamp),
             )
+            self.conn.execute("UPDATE song_mappings SET dest_json = ?, match_method = ? WHERE pair_id = ? AND source_id = ?", (json.dumps(destination) if destination else None, match_method, pair_id, source_id))
+
+    def mapping_details(self, pair_id: str) -> list[dict]:
+        with self.lock:
+            rows = self.conn.execute("SELECT m.*, s.title, s.artist, s.album, s.audio_locale, s.storefront, s.raw_json FROM song_mappings m LEFT JOIN source_tracks s ON m.pair_id = s.pair_id AND m.source_id = s.source_id WHERE m.pair_id = ? ORDER BY m.updated_at DESC", (pair_id,)).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["destination"] = json.loads(item.get("dest_json") or "{}")
+            item["candidates"] = json.loads(item.get("candidates_json") or "[]")
+            result.append(item)
+        return result
+
+    def record_change(self, run_id: int, action: str, target_id: str, previous: dict | None = None) -> None:
+        with self.lock, self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO run_changes(run_id, action, target_id, previous_json) VALUES (?, ?, ?, ?)", (run_id, action, target_id, json.dumps(previous) if previous is not None else None))
+
+    def changes(self, run_id: int) -> list[sqlite3.Row]:
+        with self.lock:
+            return self.conn.execute("SELECT * FROM run_changes WHERE run_id = ? AND undone = 0 ORDER BY id DESC", (run_id,)).fetchall()
+
+    def mark_undone(self, change_id: int) -> None:
+        with self.lock, self.conn:
+            self.conn.execute("UPDATE run_changes SET undone = 1 WHERE id = ?", (change_id,))
+
+    def restore_mapping(self, pair_id: str, source_id: str, previous: dict | None) -> None:
+        with self.lock, self.conn:
+            self.conn.execute("DELETE FROM song_mappings WHERE pair_id = ? AND source_id = ?", (pair_id, source_id))
+            if previous:
+                columns = list(previous)
+                self.conn.execute(f"INSERT INTO song_mappings ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})", list(previous.values()))
+
+    def request_stop(self, run_id: int) -> bool:
+        with self.lock, self.conn:
+            cursor = self.conn.execute("UPDATE sync_runs SET cancel_requested = 1, status = 'stopping' WHERE id = ? AND status IN ('running', 'stopping')", (run_id,))
+            return cursor.rowcount > 0
 
     def set_initial_done(self, pair_id: str, done: bool, error: str | None = None) -> None:
         with self.lock, self.conn:
@@ -123,3 +169,15 @@ class SyncDatabase:
     def recent_runs(self, limit: int = 20) -> list[sqlite3.Row]:
         with self.lock:
             return self.conn.execute("SELECT * FROM sync_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    def run(self, run_id: int) -> sqlite3.Row | None:
+        with self.lock:
+            return self.conn.execute("SELECT * FROM sync_runs WHERE id = ?", (run_id,)).fetchone()
+
+    def interrupt_runs(self) -> None:
+        with self.lock, self.conn:
+            self.conn.execute("UPDATE sync_runs SET status = 'interrupted', finished_at = ?, error = 'Service restarted before run completed; inspect run changes before retrying' WHERE status IN ('running', 'stopping', 'reverting')", (now_iso(),))
+
+    def latest_run(self, pair_id: str) -> sqlite3.Row | None:
+        with self.lock:
+            return self.conn.execute("SELECT * FROM sync_runs WHERE pair_id = ? ORDER BY id DESC LIMIT 1", (pair_id,)).fetchone()

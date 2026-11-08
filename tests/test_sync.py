@@ -11,6 +11,9 @@ class FakeApple:
     def tracks(self, _playlist):
         return [self.source]
 
+    def audio_locale(self, track):
+        return track.audio_locale
+
     def metadata(self, track, storefront):
         self.metadata_calls += 1
         return Track(track.id, track.title, track.artist, track.album, track.duration_ms, storefront=storefront)
@@ -153,3 +156,136 @@ def test_lyric_fallback_uses_only_first_three_complete_lines(tmp_path):
         if not expected:
             assert 'manual correction required' in reason
     assert calls == ['1'] * len(cases)
+
+
+def test_resolved_audio_locale_selects_japan_and_is_cached_by_mapping(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    apple.source.audio_locale = None
+    locale_calls = []
+    def resolve(track):
+        locale_calls.append(track.id)
+        return 'ja'
+    apple.audio_locale = resolve
+    service = SyncService(SyncDatabase(tmp_path / 'locale.sqlite3'), apple, netease)
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    assert service.sync(pair).added == 1
+    assert service.db.conn.execute('SELECT storefront FROM source_tracks').fetchone()[0] == 'jp'
+    assert service.sync(pair).skipped == 1
+    assert locale_calls == ['apple-1']
+
+
+def wait_for_run(db, run_id):
+    import time
+    deadline = time.monotonic() + 4
+    while db.run(run_id)['status'] in {'running', 'stopping', 'reverting'} and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return db.run(run_id)
+
+
+def test_stop_reverts_added_songs_new_mappings_and_restores_existing_mapping(tmp_path):
+    import threading
+    apple, netease = FakeApple(), FakeNetease()
+    tracks = [Track('first', 'Song', 'Artist', 'Album', 180000, audio_locale='ja'), Track('second', 'Song', 'Artist', 'Album', 180000, audio_locale='ja')]
+    apple.tracks = lambda _: tracks
+    entered, release = threading.Event(), threading.Event()
+    original = apple.metadata
+    def metadata(track, storefront):
+        if track.id == 'second':
+            entered.set()
+            assert release.wait(3)
+        return original(track, storefront)
+    apple.metadata = metadata
+    netease.items = [Candidate('existing', 'Existing', 'Artist')]
+    db = SyncDatabase(tmp_path / 'stop.sqlite3')
+    db.save_mapping('pair', 'first', None, 'failed', error='previous error')
+    previous = dict(db.mapping('pair', 'first'))
+    service = SyncService(db, apple, netease)
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease', removal_policy='preserve')
+    run = service.sync(pair, background=True)
+    try:
+        assert entered.wait(2)
+        assert {t.id for t in netease.items} == {'existing', 'netease-1'}
+        service.stop_and_revert(pair, run.run_id)
+        assert db.run(run.run_id)['status'] == 'stopping'
+    finally:
+        release.set()
+    assert wait_for_run(db, run.run_id)['status'] == 'cancelled'
+    assert {t.id for t in netease.items} == {'existing'}
+    assert dict(db.mapping('pair', 'first')) == previous
+    assert db.mapping('pair', 'second') is None
+    assert db.changes(run.run_id) == []
+
+
+def test_stop_during_add_undoes_inflight_write_and_supports_retry(tmp_path):
+    import threading
+    apple, netease = FakeApple(), FakeNetease()
+    entered, release = threading.Event(), threading.Event()
+    original_add = netease.add
+    def add(playlist, song):
+        original_add(playlist, song)
+        entered.set()
+        assert release.wait(3)
+    netease.add = add
+    db = SyncDatabase(tmp_path / 'retry.sqlite3')
+    service = SyncService(db, apple, netease)
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    original_remove = netease.remove
+    netease.remove = lambda *_: (_ for _ in ()).throw(RuntimeError('provider offline'))
+    run = service.sync(pair, background=True)
+    try:
+        assert entered.wait(2)
+        service.stop_and_revert(pair, run.run_id)
+    finally:
+        release.set()
+    assert wait_for_run(db, run.run_id)['status'] == 'rollback_failed'
+    assert db.changes(run.run_id)
+    assert service.sync(pair).status == 'revert_required'
+    netease.remove = original_remove
+    service.stop_and_revert(pair, run.run_id)
+    assert wait_for_run(db, run.run_id)['status'] == 'cancelled'
+    assert netease.items == []
+    assert db.mapping('pair', 'apple-1') is None
+
+
+def test_stop_readds_songs_removed_during_mirror_cleanup(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    netease.items = [Candidate('existing', 'Existing', 'Artist')]
+    db = SyncDatabase(tmp_path / 'mirror-stop.sqlite3')
+    service = SyncService(db, apple, netease)
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease', initial_policy='mirror')
+    original_remove = netease.remove
+    def remove(playlist, song):
+        original_remove(playlist, song)
+        if song == 'existing':
+            assert db.request_stop(db.latest_run('pair')['id'])
+    netease.remove = remove
+    run = service.sync(pair)
+    assert run.status == 'cancelled'
+    assert {t.id for t in netease.items} == {'existing'}
+    assert db.mapping('pair', 'apple-1') is None
+
+
+def test_flagged_incorrect_mapping_waits_for_manual_correction(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    service = SyncService(SyncDatabase(tmp_path / 'flag.sqlite3'), apple, netease)
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    service.sync(pair)
+    service.flag_incorrect(pair, 'apple-1')
+    assert service.sync(pair).ambiguous == 1
+    assert netease.search_calls == 1
+    service.correct(pair, 'apple-1', 'correct')
+    assert service.db.mapping('pair', 'apple-1')['manual']
+    assert {t.id for t in netease.items} == {'correct'}
+
+
+def test_removed_source_mapping_is_removed_without_deleting_shared_destination(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    service = SyncService(SyncDatabase(tmp_path / 'shared.sqlite3'), apple, netease)
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    service.sync(pair)
+    service.db.save_mapping('pair', 'removed-source', 'netease-1', 'synced')
+    result = service.sync(pair)
+    assert result.removed == 0
+    assert service.db.mapping('pair', 'removed-source') is None
+    assert service.db.mapping('pair', 'apple-1')['dest_id'] == 'netease-1'
+    assert {t.id for t in netease.items} == {'netease-1'}

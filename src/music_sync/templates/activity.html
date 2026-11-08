@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% from 'components.html' import heading, run_table with context %}{% block content %}
+{{ heading('Sync activity', 'Inspect recent runs, follow live progress, and review reverted or interrupted operations.') }}
+<section class="panel"><div class="panel-heading"><h2>Recent runs</h2><span class="subtle-label">Latest {{ runs|length }} runs</span></div>{{ run_table(runs) }}</section>
+{% endblock %}

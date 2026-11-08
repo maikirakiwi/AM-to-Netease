@@ -65,6 +65,7 @@ def song_id(value: str) -> str:
 
 class AppleProvider(Protocol):
     def tracks(self, playlist: str) -> list[Track]: ...
+    def audio_locale(self, track: Track) -> str | None: ...
     def metadata(self, track: Track, storefront: str) -> Track: ...
     def lyrics(self, track: Track) -> str: ...
 
@@ -153,6 +154,19 @@ class AppleMusicClient:
                 raw={"catalog_id": play_params.get("catalogId") or source_id, "storefront": storefront, "attributes": attrs},
             ))
         return tracks
+
+    def audio_locale(self, track: Track) -> str | None:
+        if track.audio_locale:
+            return track.audio_locale
+        catalog_id = track.raw.get("catalog_id") or track.id
+        try:
+            payload = self._get(f"/songs/{catalog_id}", storefront=track.raw.get("storefront"),
+                                params={"fields": "audioLocale"}, media=True)
+            data = payload.get("data", [])
+            return data[0].get("attributes", {}).get("audioLocale") if data else None
+        except Exception:
+            logger.warning("Apple audio locale lookup failed: source=%s", track.id, exc_info=True)
+            return None
 
     def lyrics(self, track: Track) -> str:
         catalog_id = track.raw.get("catalog_id") or track.id

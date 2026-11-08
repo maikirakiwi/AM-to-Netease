@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f48120'/%3E%3Cpath d='M13 23V9l12-2v13M13 13l12-2' fill='none' stroke='white' stroke-width='2'/%3E%3Cellipse cx='10' cy='23' rx='3' ry='2' fill='white'/%3E%3Cellipse cx='22' cy='20' rx='3' ry='2' fill='white'/%3E%3C/svg%3E"><title>{{ title }} · Music Bridge</title><link rel="stylesheet" href="/static/dashboard.css"><script src="/static/dashboard.js" defer></script></head>
+<body>
+<svg class="icon-library" xmlns="http://www.w3.org/2000/svg"><defs>
+<symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+<symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-2 2M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l2-2"/></symbol>
+<symbol id="i-song" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13M9 9l12-2"/><ellipse cx="6" cy="18" rx="3" ry="3"/><ellipse cx="18" cy="16" rx="3" ry="3"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="i-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3Z M12 9v5M12 17h.01"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 13 3M18 18A8 8 0 0 1 5 15"/></symbol>
+</defs></svg>
+<a class="skip-link" href="#main">Skip to content</a>
+<aside class="sidebar">
+<a class="brand" href="/"><span class="brand-mark">{{ icon('song') }}</span><span>Music Bridge<small>APPLE MUSIC TO NETEASE</small></span></a>
+<div class="workspace"><span class="workspace-avatar">M</span><div>My workspace<small>Playlist synchronization</small></div><span class="workspace-chevron">⌄</span></div>
+<div class="nav-label">WORKSPACE</div>
+<nav aria-label="Main navigation">
+<a class="nav-item {{ 'active' if active == 'overview' }}" href="/">{{ icon('grid') }} Overview</a>
+<a class="nav-item {{ 'active' if active == 'pairs' }}" href="/playlists">{{ icon('link') }} Playlists</a>
+<a class="nav-item {{ 'active' if active == 'songs' }}" href="/songs">{{ icon('song') }} Song library</a>
+<a class="nav-item {{ 'active' if active == 'attention' }}" href="/attention">{{ icon('alert') }} Needs attention{% if attention_count %}<span class="nav-count">{{ attention_count }}</span>{% endif %}</a>
+<a class="nav-item {{ 'active' if active == 'activity' }}" href="/activity">{{ icon('clock') }} Sync activity</a>
+</nav>
+<div class="nav-label secondary-nav">CONFIGURATION</div>
+<nav aria-label="Configuration"><a class="nav-item {{ 'active' if active == 'settings' }}" href="/settings">{{ icon('settings') }} Settings & connections</a></nav>
+<div class="sidebar-bottom"><span class="status-dot {{ 'green' if ready else 'amber' }}"></span><span>{{ 'Providers configured' if ready else 'Setup required' }}<small>{{ 'Ready to synchronize' if ready else 'Connect your music accounts' }}</small></span></div>
+</aside>
+<div class="app-shell"><header class="topbar"><div class="breadcrumb">My workspace <span>/</span> <strong>{{ title }}</strong></div><div class="topbar-end"><span class="local-label">{{ icon('link') }} Local workspace</span><span class="avatar">M</span></div></header>
+<main id="main">
+{% if flash %}<div class="notice success" role="status">{{ icon('check') }} {{ flash }}</div>{% endif %}
+{% block content %}{% endblock %}
+<footer>Music Bridge <span>Apple Music <span class="footer-arrow">→</span> Netease Music</span><span>Local data. Your playlists.</span></footer>
+</main></div>
+</body></html>

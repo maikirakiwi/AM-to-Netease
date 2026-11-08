@@ -32,4 +32,4 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.setuptools.package-data]
-music_sync = ["*.js"]
+music_sync = ["*.js", "*.css", "templates/*.html"]
