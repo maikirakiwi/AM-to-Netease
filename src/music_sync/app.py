@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from .database import SyncDatabase
 from .models import SyncPair
@@ -161,31 +161,20 @@ def correct_mapping(pair_id: str, source_id: str, url: str = Form(...)) -> Redir
 @app.get("/setup/apple", response_class=HTMLResponse)
 def apple_setup() -> HTMLResponse:
     token = runtime.settings.load().get("apple", {}).get("developer_token", "")
-    token_json = json.dumps(token)
+    token_json = json.dumps(token).replace("<", "\\u003c")
     body = f"""<h1>Apple Music authorization</h1>
-    <p>Authorize this browser with MusicKit. The resulting user token is sent to this local service.</p>
-    <button id='authorize'>Authorize Apple Music</button><p id='status'></p>
-    <script>
-      document.addEventListener('musickitloaded', async () => {{
-        try {{
-        const music = await MusicKit.configure({{ developerToken: {token_json}, app: {{ name: 'Apple-Netease Sync', build: '0.1.0' }} }});
-        document.getElementById('authorize').onclick = async () => {{
-          document.getElementById('status').textContent = 'Waiting for Apple Music authorization…';
-          try {{ const userToken = await music.authorize();
-            const response = await fetch('/setup/apple', {{ method: 'POST', headers: {{'Content-Type':'application/x-www-form-urlencoded'}}, body: 'user_token=' + encodeURIComponent(userToken) }});
-            if (!response.ok) throw new Error(await response.text());
-            document.getElementById('status').textContent = 'Authorized and verified. Return to the dashboard.';
-          }} catch (error) {{ document.getElementById('status').textContent = String(error); }}
-        }};
-        }} catch (error) {{
-          document.getElementById('status').textContent = 'MusicKit initialization failed: ' + String(error) + '. Check the developer token and its allowed website origin. Apple web-player tokens cannot authorize on this dashboard domain; use your own developer token or the manual token fallback.';
-        }}
-      }});
-    </script>
-    <script src='https://js-cdn.music.apple.com/musickit/v3/musickit.js'></script>
+    <p>Sign in using Apple's authorization window. This server verifies your token and storefront before saving.</p>
+    <button id='authorize'>Authorize Apple Music</button><p id='status' role='status'></p>
+    <script id='apple-config' type='application/json'>{token_json}</script>
+    <script src='/static/apple_auth.js' defer></script>
     <p>Developer token configured: {'yes' if token else 'no'}</p>
     <details><summary>Manual token fallback</summary><form method='post' action='/setup/apple'><input type='text' name='user_token' placeholder='Music user token' size='80' required><button>Save user token</button></form></details>"""
     return page("Apple authorization", body)
+
+
+@app.get("/static/apple_auth.js")
+def apple_auth_script() -> FileResponse:
+    return FileResponse(Path(__file__).with_name("apple_auth.js"), media_type="text/javascript")
 
 
 @app.post("/setup/apple")
