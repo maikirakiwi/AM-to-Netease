@@ -76,7 +76,14 @@ def test_dashboard_song_breakdowns_filters_and_packaged_assets(tmp_path, monkeyp
             response = client.get(route)
             assert response.status_code == 200, route
             assert '<script>alert(1)</script>' not in response.text
-        assert '1 results' in client.get('/attention').text
+        attention_page = client.get('/attention').text
+        assert '1 results' in attention_page
+        assert 'href="#song-pair-source"' in attention_page
+        assert 'id="song-pair-source"' in attention_page
+        assert 'No unique lyric match' in attention_page
+        assert '80.0%' in attention_page
+        assert 'action="/pairs/pair/mappings/source/correct"' in attention_page
+        assert 'name="return_to" value="/attention"' in attention_page
         assert '0 results' in client.get('/songs?state=synced').text
         assert '0 results' in client.get('/songs?q=missing').text
         assert 'No unique lyric match' in client.get('/pairs/pair/mappings').text
@@ -117,3 +124,18 @@ def test_stop_route_returns_immediately_and_reverts_after_provider_returns(tmp_p
         from test_sync import wait_for_run
         assert wait_for_run(db,run_id)['status'] == 'cancelled'
         assert netease.items == []
+
+
+def test_attention_correction_returns_to_queue_and_preserves_other_review_routes(tmp_path, monkeypatch):
+    from music_sync import app as web
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    db = SyncDatabase(tmp_path / 'correction-web.sqlite3')
+    calls = []
+    service = SimpleNamespace(correct=lambda *args: calls.append(args))
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(db=db, sync=service, scheduler=None, settings=SimpleNamespace(pairs=lambda: [pair])))
+    with TestClient(web.app) as client:
+        for return_to, expected in [('/attention', '/attention'), ('', '/pairs/pair/mappings'), ('https://example.com', '/pairs/pair/mappings')]:
+            response = client.post('/pairs/pair/mappings/source/correct', data={'url': 'https://music.163.com/#/song?id=123', 'return_to': return_to}, follow_redirects=False)
+            assert response.status_code == 303
+            assert response.headers['location'] == expected
+        assert calls == [(pair, 'source', '123')] * 3

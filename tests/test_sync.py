@@ -314,3 +314,44 @@ def test_multiple_lyric_matches_choose_highest_metadata_score_at_least_point_nin
             assert reason == ''
         else:
             assert 'multiple candidates' in reason
+
+
+def test_fallback_queries_merge_candidates_before_lyric_matching(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    apple.source = Track('apple-1', 'Song (feat. Guest)', 'Character(CV:Actor)', 'Album', 180000, audio_locale='ja')
+    apple.lyrics = lambda _: 'First line'
+    wrong = Candidate('wrong', 'Other', 'Other')
+    correct = Candidate('correct', 'Song', 'Actor / Guest', 'Album', 180000)
+    queries, lyric_calls = [], []
+    def search(query):
+        queries.append(query)
+        if len(queries) < 3:
+            return [wrong]
+        # Equal metadata scores keep this ambiguous until lyrics are checked.
+        return [wrong, correct, Candidate('alternate', 'Song', 'Guest / Actor', 'Album', 180000)]
+    netease.search = search
+    def lyrics(song):
+        lyric_calls.append(song)
+        return 'First line' if song == 'correct' else 'Other words'
+    netease.lyrics = lyrics
+    service = SyncService(SyncDatabase(tmp_path / 'fallback.sqlite3'), apple, netease)
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease', removal_policy='preserve')
+    assert service.sync(pair).added == 1
+    assert queries == ['Song (feat. Guest) Character(CV:Actor)', 'Song Actor', 'Song']
+    assert len(lyric_calls) == len(set(lyric_calls)) == 3
+    assert service.db.mapping('pair', 'apple-1')['dest_id'] == 'correct'
+    assert service.sync(pair).skipped == 1
+    assert len(queries) == 3
+
+
+def test_fallback_stops_after_confident_second_query(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    apple.source.artist = 'Character(CV:Artist)'
+    queries = []
+    def search(query):
+        queries.append(query)
+        return [] if len(queries) == 1 else [Candidate('correct', 'Song', 'Artist', 'Album', 180000)]
+    netease.search = search
+    service = SyncService(SyncDatabase(tmp_path / 'fallback-stop.sqlite3'), apple, netease)
+    assert service.sync(SyncPair('pair', 'Pair', 'apple', 'netease')).added == 1
+    assert queries == ['Song Character(CV:Artist)', 'Song Artist']

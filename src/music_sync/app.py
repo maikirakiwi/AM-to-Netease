@@ -331,7 +331,7 @@ def mappings(pair_id: str, state: str = "all", q: str = "", p: int = 1) -> HTMLR
 
 
 @app.post("/pairs/{pair_id}/mappings/{source_id}/correct")
-def correct_mapping(pair_id: str, source_id: str, url: str = Form(...)) -> RedirectResponse:
+def correct_mapping(pair_id: str, source_id: str, url: str = Form(...), return_to: str = Form("")) -> RedirectResponse:
     if not runtime.sync:
         raise HTTPException(503, "Provider setup is incomplete")
     pair = get_pair(pair_id)
@@ -340,7 +340,7 @@ def correct_mapping(pair_id: str, source_id: str, url: str = Form(...)) -> Redir
     except Exception as exc:
         logger.exception("Manual correction failed: pair=%s source=%s", pair_id, source_id)
         raise HTTPException(400, str(exc)) from exc
-    return RedirectResponse(f"/pairs/{pair_id}/mappings", status_code=303)
+    return RedirectResponse("/attention" if return_to == "/attention" else f"/pairs/{pair_id}/mappings", status_code=303)
 
 
 @app.post("/pairs/{pair_id}/mappings/{source_id}/flag")

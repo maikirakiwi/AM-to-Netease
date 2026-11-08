@@ -6,7 +6,7 @@ import json
 import threading
 
 from .database import SyncDatabase
-from .matching import choose, contains_lyric_line
+from .matching import choose, contains_lyric_line, search_queries
 from .models import Candidate, SyncPair, SyncResult, Track
 from .notify import DiscordNotifier
 from .providers import AppleProvider, NeteaseProvider, storefront_for_locale
@@ -109,9 +109,15 @@ class SyncService:
                         canonical.raw["fallback_storefront"] = True
                     self._check_cancel(run_id)
                     self.db.set_source(pair.id, canonical)
-                    candidates = self.netease.search(f"{canonical.title} {canonical.artist}")
-                    self._check_cancel(run_id)
-                    match, ranked = choose(canonical, candidates)
+                    candidates = {}
+                    for query in search_queries(canonical):
+                        self._check_cancel(run_id)
+                        for candidate in self.netease.search(query):
+                            candidates.setdefault(candidate.id, candidate)
+                        self._check_cancel(run_id)
+                        match, ranked = choose(canonical, list(candidates.values()))
+                        if match:
+                            break
                     method = "metadata"
                     reason = "no confident unique match"
                     if not match:
