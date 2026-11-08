@@ -87,6 +87,13 @@ class AppleMusicClient:
         headers = {"Authorization": f"Bearer {self.developer_token}", "Music-User-Token": self.user_token}
         if httpx is not None:
             response = httpx.get(url, headers=headers, params=params, timeout=self.timeout)
+            if response.status_code in (401, 403):
+                raise RuntimeError(
+                    f"Apple Music authentication failed (HTTP {response.status_code}). "
+                    "Verify the Apple Music developer token is valid and has not expired in Settings, "
+                    "then authorize Apple Music again using the same developer credentials. "
+                    "The server has not accepted the supplied credentials."
+                )
             response.raise_for_status()
             return response.json()
         from urllib.parse import urlencode

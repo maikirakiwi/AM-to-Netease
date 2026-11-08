@@ -164,20 +164,21 @@ def apple_setup() -> HTMLResponse:
     token_json = json.dumps(token)
     body = f"""<h1>Apple Music authorization</h1>
     <p>Authorize this browser with MusicKit. The resulting user token is sent to this local service.</p>
-    <script src='https://js-cdn.music.apple.com/musickit/v3/musickit.js'></script>
     <button id='authorize'>Authorize Apple Music</button><p id='status'></p>
     <script>
       document.addEventListener('musickitloaded', async () => {{
-        const music = MusicKit.configure({{ developerToken: {token_json}, app: {{ name: 'Apple-Netease Sync', build: '0.1.0' }} }});
+        const music = await MusicKit.configure({{ developerToken: {token_json}, app: {{ name: 'Apple-Netease Sync', build: '0.1.0' }} }});
         document.getElementById('authorize').onclick = async () => {{
           document.getElementById('status').textContent = 'Waiting for Apple Music authorization…';
           try {{ const userToken = await music.authorize();
-            await fetch('/setup/apple', {{ method: 'POST', headers: {{'Content-Type':'application/x-www-form-urlencoded'}}, body: 'user_token=' + encodeURIComponent(userToken) }});
-            document.getElementById('status').textContent = 'Authorized. Return to the dashboard.';
+            const response = await fetch('/setup/apple', {{ method: 'POST', headers: {{'Content-Type':'application/x-www-form-urlencoded'}}, body: 'user_token=' + encodeURIComponent(userToken) }});
+            if (!response.ok) throw new Error(await response.text());
+            document.getElementById('status').textContent = 'Authorized and verified. Return to the dashboard.';
           }} catch (error) {{ document.getElementById('status').textContent = String(error); }}
         }};
       }});
     </script>
+    <script src='https://js-cdn.music.apple.com/musickit/v3/musickit.js'></script>
     <p>Developer token configured: {'yes' if token else 'no'}</p>
     <details><summary>Manual token fallback</summary><form method='post' action='/setup/apple'><input type='text' name='user_token' placeholder='Music user token' size='80' required><button>Save user token</button></form></details>"""
     return page("Apple authorization", body)
@@ -186,6 +187,11 @@ def apple_setup() -> HTMLResponse:
 @app.post("/setup/apple")
 def save_apple_token(user_token: str = Form(...)) -> RedirectResponse:
     data = runtime.settings.load()
+    try:
+        AppleMusicClient(data["apple"]["developer_token"], user_token.strip())._get("/v1/me/storefronts")
+    except Exception as exc:
+        logger.exception("Apple Music authorization verification failed")
+        raise HTTPException(400, str(exc)) from exc
     data["apple"]["music_user_token"] = user_token.strip()
     runtime.settings.save(data)
     runtime.rebuild()
