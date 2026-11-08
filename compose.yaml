@@ -2,13 +2,18 @@ services:
   app:
     build: .
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8000:8000"
+    expose:
+      - "8008"
     volumes:
-      - ./data:/data
+      - app-data:/data
     working_dir: /data
+    environment:
+      TZ: Asia/Shanghai
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/healthz')"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+volumes:
+  app-data:

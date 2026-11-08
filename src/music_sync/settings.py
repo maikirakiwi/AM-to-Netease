@@ -13,7 +13,7 @@ from .models import SyncPair
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "version": 1,
-    "server": {"host": "0.0.0.0", "port": 8000},
+    "server": {"host": "0.0.0.0", "port": 8008},
     "schedule": {"enabled": True, "time": "03:00", "timezone": "Asia/Shanghai", "catch_up": True},
     "apple": {"developer_token": "", "music_user_token": ""},
     "netease": {"session": {}},

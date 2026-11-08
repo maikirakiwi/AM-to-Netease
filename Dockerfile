@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir .
 RUN mkdir -p /data
 VOLUME ["/data"]
 ENV PYTHONUNBUFFERED=1
-CMD ["uvicorn", "music_sync.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "music_sync.app:app", "--host", "0.0.0.0", "--port", "8008"]
