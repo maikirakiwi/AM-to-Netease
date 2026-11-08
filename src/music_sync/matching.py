@@ -12,6 +12,14 @@ def normalize(value: str) -> str:
     return re.sub(r"[^\w]+", "", value, flags=re.UNICODE)
 
 
+def contains_lyric_line(first_line: str, lyrics: str) -> bool:
+    expected = normalize(first_line)
+    return bool(expected) and any(
+        expected in normalize(re.sub(r"\[[^\]]*\]", "", line))
+        for line in lyrics.splitlines()
+    )
+
+
 def _ratio(left: str, right: str) -> float:
     return SequenceMatcher(None, normalize(left), normalize(right)).ratio()
 

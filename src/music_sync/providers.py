@@ -7,6 +7,7 @@ import json
 import re
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
+from xml.etree import ElementTree
 
 try:
     import httpx
@@ -65,11 +66,13 @@ def song_id(value: str) -> str:
 class AppleProvider(Protocol):
     def tracks(self, playlist: str) -> list[Track]: ...
     def metadata(self, track: Track, storefront: str) -> Track: ...
+    def lyrics(self, track: Track) -> str: ...
 
 
 class NeteaseProvider(Protocol):
     def playlist_tracks(self, playlist: str) -> list[Candidate]: ...
     def search(self, query: str) -> list[Candidate]: ...
+    def lyrics(self, netease_id: str) -> str: ...
     def song(self, netease_id: str) -> Candidate: ...
     def add(self, playlist: str, netease_id: str) -> None: ...
     def remove(self, playlist: str, netease_id: str) -> None: ...
@@ -90,12 +93,15 @@ class AppleMusicClient:
         except (IndexError, ValueError, TypeError):
             pass
 
-    def _get(self, path: str, storefront: str | None = None, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if path.startswith("/v1/me"):
-            url = f"https://api.music.apple.com{path}"
+    def _get(self, path: str, storefront: str | None = None, params: dict[str, Any] | None = None, *, media: bool = False) -> dict[str, Any]:
+        base = "https://amp-api.music.apple.com" if media else "https://api.music.apple.com"
+        if path.startswith("/v1/"):
+            url = f"{base}{path}"
         else:
-            url = f"https://api.music.apple.com/v1/catalog/{storefront or 'us'}{path}"
+            url = f"{base}/v1/catalog/{storefront or 'us'}{path}"
         headers = {"Authorization": f"Bearer {self.developer_token}", "Music-User-Token": self.user_token}
+        if media or self.origin:
+            headers["Media-User-Token"] = self.user_token
         if self.origin:
             headers.update({"Origin": self.origin, "Referer": self.origin + "/"})
         if httpx is not None:
@@ -126,13 +132,17 @@ class AppleMusicClient:
     def tracks(self, playlist: str) -> list[Track]:
         playlist_value = playlist_id(playlist)
         storefront = self.storefront()
-        if playlist_value.startswith("pl.u-"):
+        if playlist_value.startswith("p."):
             path = f"/v1/me/library/playlists/{playlist_value}/tracks"
-            payload = self._get(path)
         else:
-            payload = self._get(f"/playlists/{playlist_value}/tracks", storefront=storefront)
+            path = f"/playlists/{playlist_value}/tracks"
         tracks: list[Track] = []
-        for item in payload.get("data", []):
+        items = []
+        while path:
+            payload = self._get(path, storefront=storefront)
+            items.extend(payload["data"])
+            path = payload.get("next")
+        for item in items:
             attrs = item.get("attributes", {})
             play_params = attrs.get("playParams", {})
             source_id = item.get("id", "")
@@ -143,6 +153,25 @@ class AppleMusicClient:
                 raw={"catalog_id": play_params.get("catalogId") or source_id, "storefront": storefront, "attributes": attrs},
             ))
         return tracks
+
+    def lyrics(self, track: Track) -> str:
+        catalog_id = track.raw.get("catalog_id") or track.id
+        storefronts = dict.fromkeys([track.storefront or "cn", track.raw.get("storefront") or track.storefront or "cn"])
+        for storefront in storefronts:
+            for endpoint in ("syllable-lyrics", "lyrics"):
+                try:
+                    payload = self._get(f"/songs/{catalog_id}/{endpoint}", storefront=storefront, media=True)
+                    data = payload.get("data", [])
+                    ttml = data[0].get("attributes", {}).get("ttml", "") if data else ""
+                    if ttml:
+                        root = ElementTree.fromstring(ttml)
+                        lines = ["".join(p.itertext()).strip() for p in root.findall(".//{*}body//{*}p")]
+                        text = "\n".join(line for line in lines if line)
+                        if text:
+                            return text
+                except Exception:
+                    logger.warning("Apple lyrics lookup failed: source=%s storefront=%s endpoint=%s", track.id, storefront, endpoint, exc_info=True)
+        return ""
 
     def metadata(self, track: Track, storefront: str) -> Track:
         catalog_id = track.raw.get("catalog_id") or track.id
@@ -228,6 +257,12 @@ class PyncmClient:
         payload = self.track_api.GetTrackDetail([netease_id], session=self._session)
         songs = payload.get("songs", payload)
         return self._track(songs[0])
+
+    def lyrics(self, netease_id: str) -> str:
+        payload = self.track_api.GetTrackLyrics(netease_id, session=self._session)
+        if payload.get("code") != 200:
+            raise RuntimeError(f"Netease lyrics lookup failed ({payload.get('code')})")
+        return (payload.get("lrc") or {}).get("lyric", "")
 
     def add(self, playlist: str, netease_id: str) -> None:
         self._modify(playlist, netease_id, "add")

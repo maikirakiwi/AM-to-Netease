@@ -18,3 +18,12 @@ def test_choose_rejects_ambiguous_matches():
     candidates = [Candidate("1", "Song", "Artist", "Album", 180000), Candidate("2", "Song", "Artist", "Album", 180000)]
     match, _ = choose(source, candidates)
     assert match is None
+
+
+def test_lyric_contains_ignores_timestamps_and_formatting():
+    from music_sync.matching import contains_lyric_line
+    assert contains_lyric_line('Ｈello, world!', '[00:01.20]Hello WORLD')
+    assert contains_lyric_line('Hello world', '[00:01.20]Intro: Hello world — repeated')
+    assert not contains_lyric_line('Hello world', '[00:01.20]Hello')
+    assert not contains_lyric_line('', 'anything')
+    assert not contains_lyric_line('hello world', 'hello\nworld')

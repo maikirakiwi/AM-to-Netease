@@ -31,3 +31,13 @@ def test_qr_login_uses_fork_flow(monkeypatch):
     monkeypatch.setattr(client.pyncm, "WriteLoginInfo", lambda status, session: None)
     monkeypatch.setattr(qrcode.QRCode, "print_ascii", lambda *args, **kwargs: None)
     assert client.login_qr() == client.session()
+
+
+def test_netease_lyrics_uses_session():
+    client = PyncmClient()
+    def lyrics(song, **kwargs):
+        assert song == '123'
+        assert kwargs['session'] is client._session
+        return {'code': 200, 'lrc': {'lyric': '[00:01]First line'}}
+    client.track_api = SimpleNamespace(GetTrackLyrics=lyrics)
+    assert client.lyrics('123') == '[00:01]First line'

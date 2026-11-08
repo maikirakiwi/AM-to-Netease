@@ -7,7 +7,7 @@ import threading
 from collections.abc import Callable
 
 from .database import SyncDatabase
-from .matching import choose
+from .matching import choose, contains_lyric_line
 from .models import Candidate, SyncPair, SyncResult, Track
 from .notify import DiscordNotifier
 from .providers import AppleProvider, NeteaseProvider, storefront_for_locale
@@ -55,12 +55,15 @@ class SyncService:
                     self.db.set_source(pair.id, canonical)
                     candidates = self.netease.search(f"{canonical.title} {canonical.artist}")
                     match, ranked = choose(canonical, candidates)
+                    reason = "no confident unique match"
+                    if not match:
+                        match, reason = self._match_lyrics(canonical, ranked[:10])
                     if not match:
                         logger.warning("No confident unique Netease match: pair=%s source=%s candidates=%s", pair.id, source.id, len(ranked))
                         unresolved = True
                         result.ambiguous += 1
-                        self.db.save_mapping(pair.id, source.id, None, "ambiguous", error="no confident unique match", candidates=[self._candidate_json(item) for item in ranked[:10]])
-                        self.notifier.send("Netease match failed", {"pair": pair.name, "title": canonical.title, "artist": canonical.artist, "storefront": canonical.storefront or storefront})
+                        self.db.save_mapping(pair.id, source.id, None, "ambiguous", error=reason, candidates=[self._candidate_json(item) for item in ranked[:10]])
+                        self.notifier.send("Netease match failed", {"pair": pair.name, "title": canonical.title, "artist": canonical.artist, "storefront": canonical.storefront or storefront, "reason": reason})
                         continue
                     if match.id not in destination:
                         self.netease.add(pair.netease_playlist, match.id)
@@ -101,6 +104,36 @@ class SyncService:
             return result
         finally:
             lock.release()
+
+    def _match_lyrics(self, source: Track, candidates: list[Candidate]) -> tuple[Candidate | None, str]:
+        reason = "manual correction required: "
+        if not candidates:
+            return None, reason + "no Netease candidates"
+        try:
+            lines = [line.strip() for line in self.apple.lyrics(source).splitlines() if line.strip()][:3]
+        except Exception:
+            logger.exception("Apple lyrics unavailable: source=%s", source.id)
+            return None, reason + "Apple lyrics lookup failed"
+        if not lines:
+            return None, reason + "Apple lyrics unavailable"
+        matches = {}
+        unavailable = []
+        for candidate in candidates:
+            try:
+                candidate_lyrics = self.netease.lyrics(candidate.id)
+                if any(contains_lyric_line(line, candidate_lyrics) for line in lines):
+                    matches[candidate.id] = candidate
+            except Exception:
+                logger.exception("Netease lyrics unavailable: source=%s candidate=%s", source.id, candidate.id)
+                unavailable.append(candidate.id)
+        if len(matches) == 1:
+            match = next(iter(matches.values()))
+            logger.info("Lyric match verified: source=%s destination=%s", source.id, match.id)
+            return match, ""
+        detail = "multiple candidates contain one of the first three Apple lyric lines" if matches else "no candidate contains any of the first three Apple lyric lines"
+        if unavailable:
+            detail += "; lyric lookup failed for " + ", ".join(unavailable)
+        return None, reason + detail
 
     def correct(self, pair: SyncPair, source_id: str, netease_id: str) -> None:
         mapping = self.db.mapping(pair.id, source_id)
