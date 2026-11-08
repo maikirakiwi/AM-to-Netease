@@ -14,6 +14,8 @@ This project can be deployed to Coolify as a Docker Compose application from the
 
 The Compose file exposes port `8008` internally for Coolify’s proxy. It stores settings, provider sessions, and SQLite data in the named `app-data` volume. Keep that volume when redeploying or updating the application.
 
+The image installs its Python build tools before installing the project. If a previous deployment failed at the Dockerfile install step, trigger a fresh deployment so Coolify rebuilds the image with the updated Dockerfile.
+
 ## First-time setup
 
 After the first deployment, open the terminal for the running `app` service in Coolify and run:
