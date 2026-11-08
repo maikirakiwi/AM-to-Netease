@@ -12,9 +12,7 @@ This project can be deployed to Coolify as a Docker Compose application from the
 6. Attach the domain you want to use for the dashboard.
 7. Deploy the application.
 
-The Compose file exposes port `8008` internally for Coolify’s proxy. It stores settings, provider sessions, and SQLite data in the named `app-data` volume. Keep that volume when redeploying or updating the application.
-
-The image installs its Python build tools before installing the project. If a previous deployment failed at the Dockerfile install step, trigger a fresh deployment so Coolify rebuilds the image with the updated Dockerfile.
+The Compose file exposes port `8008` internally for Coolify’s proxy. It stores settings, provider sessions, and SQLite data in the named `app-data` volume. Keep that volume when redeploying or updating the application. The image installs `pyncm` directly from [`sakarie9/pyncm`](https://github.com/sakarie9/pyncm), so the build installs Git before installing Python dependencies.
 
 ## First-time setup
 

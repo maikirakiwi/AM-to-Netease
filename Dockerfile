@@ -1,6 +1,9 @@
 FROM python:3.12-slim
 WORKDIR /app
 COPY pyproject.toml .
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 COPY src ./src
 RUN python -m pip install --no-cache-dir --no-build-isolation .
