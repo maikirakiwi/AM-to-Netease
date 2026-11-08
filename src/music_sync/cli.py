@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
+
 import argparse
 import getpass
 import secrets
 
 from .settings import DEFAULT_SETTINGS, SettingsStore
 
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 def setup(settings: SettingsStore) -> None:
     data = settings.load()
@@ -30,6 +35,7 @@ def setup(settings: SettingsStore) -> None:
         data["netease"]["session"] = client.login_qr()
         settings.save(data)
     except Exception as exc:
+        logger.exception("Netease QR login was not completed")
         print(f"Netease QR login was not completed: {exc}")
     print(f"Saved {settings.path}. Open the dashboard to complete Apple Music MusicKit authorization.")
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import re
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
@@ -11,6 +13,8 @@ except ImportError:  # pragma: no cover - used only in dependency-free smoke che
 
 from .models import Candidate, Track
 
+
+logger = logging.getLogger(__name__)
 
 LOCALE_STOREFRONTS = {
     "ja": "jp", "ko": "kr", "zh": "cn", "yue": "hk", "en": "us",
@@ -120,6 +124,7 @@ class AppleMusicClient:
             payload = self._get(f"/songs/{catalog_id}", storefront=storefront)
             item = payload["data"][0]
         except Exception:
+            logger.warning("Apple catalog lookup failed: source=%s storefront=%s; trying ISRC when available", track.id, storefront, exc_info=True)
             if track.isrc:
                 payload = self._get("/songs", storefront=storefront, params={"filter[isrc]": track.isrc})
                 item = payload["data"][0]

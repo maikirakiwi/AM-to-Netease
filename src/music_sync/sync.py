@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import json
 import threading
 from collections.abc import Callable
@@ -10,6 +12,8 @@ from .models import Candidate, SyncPair, SyncResult, Track
 from .notify import DiscordNotifier
 from .providers import AppleProvider, NeteaseProvider, storefront_for_locale
 
+
+logger = logging.getLogger(__name__)
 
 class SyncService:
     def __init__(self, db: SyncDatabase, apple: AppleProvider, netease: NeteaseProvider, notifier: DiscordNotifier | None = None) -> None:
@@ -45,12 +49,14 @@ class SyncService:
                     try:
                         canonical = self.apple.metadata(source, storefront)
                     except Exception:
+                        logger.warning("Apple metadata lookup failed; retrying CN: pair=%s source=%s storefront=%s", pair.id, source.id, storefront, exc_info=True)
                         canonical = self.apple.metadata(source, "cn")
                         canonical.raw["fallback_storefront"] = True
                     self.db.set_source(pair.id, canonical)
                     candidates = self.netease.search(f"{canonical.title} {canonical.artist}")
                     match, ranked = choose(canonical, candidates)
                     if not match:
+                        logger.warning("No confident unique Netease match: pair=%s source=%s candidates=%s", pair.id, source.id, len(ranked))
                         unresolved = True
                         result.ambiguous += 1
                         self.db.save_mapping(pair.id, source.id, None, "ambiguous", error="no confident unique match", candidates=[self._candidate_json(item) for item in ranked[:10]])
@@ -63,6 +69,7 @@ class SyncService:
                         self.notifier.send("Song added to Netease", {"pair": pair.name, "source": f"{canonical.title} — {canonical.artist}", "storefront": canonical.storefront or storefront, "netease": match.url or match.id})
                     self.db.save_mapping(pair.id, source.id, match.id, "synced")
                 except Exception as exc:
+                    logger.exception("Track sync failed: run=%s pair=%s source=%s", run_id, pair.id, source.id)
                     unresolved = True
                     result.failed += 1
                     self.db.save_mapping(pair.id, source.id, None, "failed", error=str(exc))
@@ -88,6 +95,7 @@ class SyncService:
             self.db.finish_run(run_id, result.status, added=result.added, skipped=result.skipped, removed=result.removed, failed=result.failed, ambiguous=result.ambiguous)
             return result
         except Exception as exc:
+            logger.exception("Playlist sync failed: run=%s pair=%s", run_id, pair.id)
             result.status, result.error = "failed", str(exc)
             self.db.finish_run(run_id, "failed", error=str(exc), added=result.added, skipped=result.skipped, removed=result.removed, failed=result.failed, ambiguous=result.ambiguous)
             return result

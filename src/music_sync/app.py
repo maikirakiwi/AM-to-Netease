@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import html
 import json
 from contextlib import asynccontextmanager
@@ -16,6 +18,9 @@ from .scheduler import SchedulerService
 from .settings import SettingsError, SettingsStore
 from .sync import SyncService
 
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 class Runtime:
     def __init__(self) -> None:
@@ -36,6 +41,7 @@ class Runtime:
                 self.sync = SyncService(self.db, apple_client, netease_client, DiscordNotifier(config.get("discord", {}).get("webhook_url", "")))
                 self.scheduler = SchedulerService(self.settings, self.sync)
         except (SettingsError, RuntimeError):
+            logger.exception("Provider initialization failed")
             self.sync = None
             self.scheduler = None
 
@@ -74,6 +80,7 @@ def dashboard() -> HTMLResponse:
         body = f"<h1>Apple → Netease Sync</h1><p class='{'ok' if runtime.sync else 'error'}'>{'Provider clients ready' if runtime.sync else 'Setup required: configure Apple tokens and Netease session in Settings.'}</p><h2>Sync pairs</h2><form method='post' action='/pairs'><input name='name' placeholder='Pair name' required><input name='apple_playlist' placeholder='Apple playlist URL or ID' required><input name='netease_playlist' placeholder='Netease playlist URL or ID' required><select name='initial_policy'><option value='preserve'>preserve existing</option><option value='mirror'>mirror on first run</option></select><button>Add pair</button></form><table><tr><th>Name</th><th>Status</th><th>Actions</th></tr>{rows or '<tr><td colspan=3>No pairs configured</td></tr>'}</table><h2>Recent runs</h2><table><tr><th>Pair</th><th>Status</th><th>Added</th><th>Removed</th><th>Failures</th></tr>{run_rows or '<tr><td colspan=5>No runs yet</td></tr>'}</table>"
         return page("Dashboard", body)
     except SettingsError as exc:
+        logger.exception("Dashboard settings could not be loaded")
         return page("Setup required", f"<h1>Setup required</h1><p class='error'>{html.escape(str(exc))}</p><p>Run <code>apple-netease-sync setup</code> and restart the service.</p>")
 
 
@@ -146,6 +153,7 @@ def correct_mapping(pair_id: str, source_id: str, url: str = Form(...)) -> Redir
     try:
         runtime.sync.correct(pair, source_id, song_id(url))
     except Exception as exc:
+        logger.exception("Manual correction failed: pair=%s source=%s", pair_id, source_id)
         raise HTTPException(400, str(exc)) from exc
     return RedirectResponse(f"/pairs/{pair_id}/mappings", status_code=303)
 
@@ -212,5 +220,6 @@ def netease_setup() -> RedirectResponse:
         runtime.settings.save(data)
         runtime.rebuild()
     except Exception as exc:
+        logger.exception("Netease QR login failed")
         raise HTTPException(500, str(exc)) from exc
     return RedirectResponse("/", status_code=303)

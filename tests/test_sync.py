@@ -63,3 +63,16 @@ def test_initial_mirror_removes_unmapped_destination(tmp_path):
     result = service.sync(SyncPair("pair", "Pair", "apple", "netease", initial_policy="mirror"))
     assert result.removed == 1
     assert [item.id for item in netease.items] == ["netease-1"]
+
+
+def test_sync_failure_is_logged(tmp_path, caplog):
+    apple, netease = FakeApple(), FakeNetease()
+    def fail(_playlist):
+        raise RuntimeError("provider unavailable")
+    apple.tracks = fail
+    service = SyncService(SyncDatabase(tmp_path / "sync.sqlite3"), apple, netease)
+    result = service.sync(SyncPair("pair", "Pair", "apple", "netease"))
+    assert result.status == "failed"
+    assert "Playlist sync failed: run=1 pair=pair" in caplog.text
+    assert "provider unavailable" in caplog.text
+    assert caplog.records[-1].exc_info
