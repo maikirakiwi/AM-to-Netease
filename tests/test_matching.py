@@ -10,7 +10,7 @@ def test_choose_accepts_unique_close_match():
     source = Track("a", "Song", "Artist", "Album", 180000)
     match, ranked = choose(source, [Candidate("n", "Song", "Artist", "Album", 180500)])
     assert match and match.id == "n"
-    assert ranked[0].score >= 0.9
+    assert ranked[0].score >= 0.8
 
 
 def test_choose_rejects_ambiguous_matches():

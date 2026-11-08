@@ -275,7 +275,7 @@ class SyncService:
             return match, ""
         if len(matches) > 1:
             match = max(matches.values(), key=lambda candidate: candidate.score)
-            if match.score >= 0.90:
+            if match.score >= 0.80:
                 logger.info("Lyric tie resolved by metadata: source=%s destination=%s score=%.4f", source.id, match.id, match.score)
                 return match, ""
         detail = "multiple candidates contain one of the first three Apple lyric lines" if matches else "no candidate contains any of the first three Apple lyric lines"

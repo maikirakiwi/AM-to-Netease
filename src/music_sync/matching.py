@@ -34,7 +34,7 @@ def score(source: Track, candidate: Candidate) -> float:
 
 def choose(source: Track, candidates: list[Candidate]) -> tuple[Candidate | None, list[Candidate]]:
     ranked = sorted((Candidate(**{**candidate.__dict__, "score": score(source, candidate)}) for candidate in candidates), key=lambda item: item.score, reverse=True)
-    if not ranked or ranked[0].score < 0.90:
+    if not ranked or ranked[0].score < 0.80:
         return None, ranked
     if source.duration_ms and ranked[0].duration_ms and abs(source.duration_ms - ranked[0].duration_ms) > 15000:
         return None, ranked
