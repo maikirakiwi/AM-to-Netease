@@ -85,6 +85,15 @@ def score(source: Track, candidate: Candidate) -> float:
 
 def choose(source: Track, candidates: list[Candidate]) -> tuple[Candidate | None, list[Candidate]]:
     ranked = sorted((Candidate(**{**candidate.__dict__, "score": score(source, candidate)}) for candidate in candidates), key=lambda item: item.score, reverse=True)
+    title = normalize(title_credits(source.title)[0])
+    album = normalize(album_title(source.album))
+    exact = [candidate for candidate in ranked
+             if title and album and normalize(title_credits(candidate.title)[0]) == title
+             and normalize(album_title(candidate.album)) == album
+             and not (source.duration_ms and candidate.duration_ms
+                      and abs(source.duration_ms - candidate.duration_ms) > 15000)]
+    if len(exact) == 1:
+        return exact[0], ranked
     if not ranked or ranked[0].score < 0.80:
         return None, ranked
     if source.duration_ms and ranked[0].duration_ms and abs(source.duration_ms - ranked[0].duration_ms) > 15000:

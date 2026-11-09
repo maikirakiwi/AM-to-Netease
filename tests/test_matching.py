@@ -88,3 +88,32 @@ def test_cai_er_shi_san_can_match_album_release_instead_of_single():
         Candidate('cover', '才二十三 (Cover 方大同)', '陆屿森', '', 220134),
     ])
     assert match and match.id == '2619125556'
+
+
+def test_exact_title_and_album_choose_candidate_regardless_of_artist_and_score():
+    source = Track('a', 'Song (feat. Guest)', 'Apple artist', 'Album - Single', 180000)
+    match, ranked = choose(source, [
+        Candidate('other-album', 'Song', 'Apple artist / Guest', 'Other album', 180000),
+        Candidate('exact', 'Ｓｏｎｇ！', 'Unrelated credit', 'Album', 180000),
+    ])
+    assert match.id == 'exact'
+    assert match.score < 0.8
+    assert ranked[0].id == 'other-album'
+
+
+def test_exact_title_album_rule_keeps_duration_and_nonempty_checks():
+    for source, candidate in [
+        (Track('a', 'Song', 'Artist', 'Album', 180000), Candidate('n', 'Song', 'Other', 'Album', 210000)),
+        (Track('a', 'Song', 'Artist', ''), Candidate('n', 'Song', 'Other', '')),
+        (Track('a', '', 'Artist', 'Album'), Candidate('n', '', 'Other', 'Album')),
+        (Track('a', 'Song (Live)', 'Artist', 'Album'), Candidate('n', 'Song', 'Other', 'Album')),
+    ]:
+        assert choose(source, [candidate])[0] is None
+
+
+def test_exact_title_and_album_accept_unknown_duration_but_keep_multiple_matches_ambiguous():
+    source = Track('a', 'Song', 'Artist', 'Album')
+    first = Candidate('1', 'Song', 'Different artist', 'Album')
+    second = Candidate('2', 'Song', 'Another artist', 'Album')
+    assert choose(source, [first])[0].id == '1'
+    assert choose(source, [first, second])[0] is None

@@ -357,3 +357,19 @@ def test_fallback_stops_after_confident_second_query(tmp_path):
     service = SyncService(SyncDatabase(tmp_path / 'fallback-stop.sqlite3'), apple, netease)
     assert service.sync(SyncPair('pair', 'Pair', 'apple', 'netease')).added == 1
     assert queries == ['Song Character(CV:Artist)', 'Song Artist']
+
+
+def test_exact_title_album_match_ignores_artist_without_lyrics_or_fallback_search(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    queries = []
+    def search(query):
+        queries.append(query)
+        return [Candidate('exact', 'Song', 'Different performer credit', 'Album', 180000)]
+    netease.search = search
+    service = SyncService(SyncDatabase(tmp_path / 'title-album.sqlite3'), apple, netease)
+    result = service.sync(SyncPair('pair', 'Pair', 'apple', 'netease'))
+    assert result.added == 1
+    assert queries == ['Song Artist']
+    mapping = service.db.mapping('pair', 'apple-1')
+    assert mapping['dest_id'] == 'exact'
+    assert mapping['match_method'] == 'metadata'
