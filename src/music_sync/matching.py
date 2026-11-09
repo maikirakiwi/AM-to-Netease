@@ -94,6 +94,13 @@ def choose(source: Track, candidates: list[Candidate]) -> tuple[Candidate | None
                       and abs(source.duration_ms - candidate.duration_ms) > 15000)]
     if len(exact) == 1:
         return exact[0], ranked
+    artist = normalize(source.artist)
+    for candidate in ranked:
+        if (title and artist and normalize(title_credits(candidate.title)[0]) == title
+                and normalize(candidate.artist) == artist
+                and not (source.duration_ms and candidate.duration_ms
+                         and abs(source.duration_ms - candidate.duration_ms) > 15000)):
+            return candidate, ranked
     if not ranked or ranked[0].score < 0.80:
         return None, ranked
     if source.duration_ms and ranked[0].duration_ms and abs(source.duration_ms - ranked[0].duration_ms) > 15000:

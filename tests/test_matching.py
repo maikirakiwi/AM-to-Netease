@@ -13,11 +13,11 @@ def test_choose_accepts_unique_close_match():
     assert ranked[0].score >= 0.8
 
 
-def test_choose_rejects_ambiguous_matches():
+def test_choose_resolves_equal_exact_title_artist_matches_in_ranked_order():
     source = Track("a", "Song", "Artist", "Album", 180000)
     candidates = [Candidate("1", "Song", "Artist", "Album", 180000), Candidate("2", "Song", "Artist", "Album", 180000)]
     match, _ = choose(source, candidates)
-    assert match is None
+    assert match.id == '1'
 
 
 def test_lyric_contains_ignores_timestamps_and_formatting():
@@ -117,3 +117,25 @@ def test_exact_title_and_album_accept_unknown_duration_but_keep_multiple_matches
     second = Candidate('2', 'Song', 'Another artist', 'Album')
     assert choose(source, [first])[0].id == '1'
     assert choose(source, [first, second])[0] is None
+
+
+def test_exact_title_artist_bypasses_album_and_runner_up_margin():
+    source = Track('a', 'Song', 'Artist', 'Apple album', 180000)
+    match, _ = choose(source, [
+        Candidate('first', 'Ｓｏｎｇ！', 'ARTIST', 'Netease album', 180000),
+        Candidate('second', 'Song', 'Artist', 'Another release', 180000),
+    ])
+    assert match.id == 'first'
+
+
+def test_exact_title_artist_still_rejects_wrong_duration():
+    source = Track('a', 'Song', 'Artist', 'Apple album', 180000)
+    assert choose(source, [Candidate('wrong', 'Song', 'Artist', 'Other album', 210000)])[0] is None
+
+
+def test_exact_title_artist_needs_nonempty_names_and_retains_version_labels():
+    for title, artist, candidate_title in [('', 'Artist', ''), ('Song', '', 'Song'), ('Song (Live)', 'Artist', 'Song')]:
+        source = Track('a', title, artist, 'Apple album')
+        candidate = Candidate('n', candidate_title, artist, 'Other album')
+        duplicate = Candidate('other', candidate_title, artist, 'Other album')
+        assert choose(source, [candidate, duplicate])[0] is None

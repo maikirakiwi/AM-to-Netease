@@ -373,3 +373,20 @@ def test_exact_title_album_match_ignores_artist_without_lyrics_or_fallback_searc
     mapping = service.db.mapping('pair', 'apple-1')
     assert mapping['dest_id'] == 'exact'
     assert mapping['match_method'] == 'metadata'
+
+
+def test_exact_title_artist_skips_unmatched_lyrics_and_saves_mapping(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    def unexpected(*args):
+        raise AssertionError('Exact title and artist should bypass lyrics')
+    apple.lyrics = netease.lyrics = unexpected
+    netease.search = lambda _: [
+        Candidate('first', 'Song', 'Artist', 'Other album', 180000),
+        Candidate('second', 'Song', 'Artist', 'Another album', 180000),
+    ]
+    service = SyncService(SyncDatabase(tmp_path / 'title-artist.sqlite3'), apple, netease)
+    result = service.sync(SyncPair('pair', 'Pair', 'apple', 'netease'))
+    assert result.added == 1
+    mapping = service.db.mapping('pair', 'apple-1')
+    assert mapping['dest_id'] == 'first'
+    assert mapping['match_method'] == 'metadata'
