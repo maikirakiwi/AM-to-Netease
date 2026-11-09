@@ -111,7 +111,7 @@ class AppleMusicClient:
             if response.status_code in (401, 403):
                 raise RuntimeError(
                     f"Apple Music authentication failed (HTTP {response.status_code}). "
-                    "Verify the Apple Music developer token is valid and has not expired in Settings, "
+                    "Restart the service to refresh the Apple Music developer token, "
                     "then authorize Apple Music again using the same developer credentials. "
                     "The server has not accepted the supplied credentials."
                 )

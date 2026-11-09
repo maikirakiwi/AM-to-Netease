@@ -11,9 +11,12 @@ from zoneinfo import ZoneInfo
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
+from starlette.concurrency import run_in_threadpool
+
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
 
+from .apple_token import fetch_developer_token
 from .database import SyncDatabase
 from .models import SyncPair
 from .notify import DiscordNotifier
@@ -52,13 +55,28 @@ class Runtime:
                 self.sync = SyncService(self.db, apple_client, netease_client, DiscordNotifier(config.get("discord", {}).get("webhook_url", "")))
                 if previous_sync:
                     self.sync._locks = previous_sync._locks
-                self.scheduler = SchedulerService(self.settings, self.sync)
-                if self.started:
-                    self.scheduler.start()
+            self.scheduler = SchedulerService(self.settings, self.sync, self.refresh_apple_token)
+            if self.started:
+                self.scheduler.start()
         except (SettingsError, RuntimeError):
             logger.exception("Provider initialization failed")
             self.sync = None
             self.scheduler = None
+
+    def refresh_apple_token(self) -> None:
+        try:
+            token = fetch_developer_token()
+            data = self.settings.load()
+            data["apple"]["developer_token"] = token
+            self.settings.save(data)
+            if self.sync:
+                self.sync.apple = AppleMusicClient(token, data["apple"]["music_user_token"])
+            elif data["apple"].get("music_user_token"):
+                self.rebuild()
+            logger.info("Apple Music developer token refreshed")
+        except Exception:
+            # Keep saved credentials and the active client usable during an Apple outage.
+            logger.warning("Apple Music developer token refresh failed; keeping the previous token")
 
 
 runtime = Runtime()
@@ -66,6 +84,7 @@ runtime = Runtime()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await run_in_threadpool(runtime.refresh_apple_token)
     runtime.started = True
     if runtime.scheduler:
         runtime.scheduler.start()
@@ -381,9 +400,8 @@ def settings_page() -> HTMLResponse:
 
 
 @app.post("/settings")
-def save_settings(developer_token: str = Form(""), webhook_url: str = Form(""), schedule_time: str = Form("03:00"), timezone: str = Form("Asia/Shanghai"), schedule_enabled: str | None = Form(None)) -> RedirectResponse:
+def save_settings(webhook_url: str = Form(""), schedule_time: str = Form("03:00"), timezone: str = Form("Asia/Shanghai"), schedule_enabled: str | None = Form(None)) -> RedirectResponse:
     data = runtime.settings.load()
-    data["apple"]["developer_token"] = developer_token.strip()
     data["discord"]["webhook_url"] = webhook_url.strip()
     data["schedule"].update(time=schedule_time.strip(), timezone=timezone.strip(), enabled=schedule_enabled is not None)
     try:

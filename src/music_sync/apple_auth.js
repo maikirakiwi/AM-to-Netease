@@ -5,7 +5,7 @@ const developerToken = JSON.parse(document.getElementById('apple-config').textCo
 
 authorizeButton.onclick = () => {
   if (!developerToken) {
-    authStatus.textContent = 'Configure an Apple developer token in Settings first.';
+    authStatus.textContent = 'Developer token unavailable. Restart the service to retry fetching from Apple.';
     return;
   }
   const popup = window.open('about:blank', 'apple-music-service-view', 'width=650,height=650');

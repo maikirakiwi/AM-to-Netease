@@ -291,7 +291,7 @@ def test_removed_source_mapping_is_removed_without_deleting_shared_destination(t
     assert {t.id for t in netease.items} == {'netease-1'}
 
 
-def test_multiple_lyric_matches_choose_highest_metadata_score_at_least_point_nine(tmp_path):
+def test_multiple_lyric_matches_choose_highest_metadata_score_at_least_point_eight(tmp_path):
     apple, netease = FakeApple(), FakeNetease()
     apple.lyrics = lambda _: 'First line\nSecond line\nThird line'
     netease.lyrics = lambda song: '[00:01]prefix Second line suffix' if song != 'nonmatching' else 'Unrelated lyrics'
@@ -300,10 +300,12 @@ def test_multiple_lyric_matches_choose_highest_metadata_score_at_least_point_nin
         (0.91, 0.89, 'first'),
         (0.89, 0.95, 'second'),
         (0.95, 0.91, 'first'),
-        (0.90, 0.89, 'first'),
-        (0.90, 0.90, 'first'),
-        (0.89, 0.88, None),
-        (0.900001, 0.90, 'first'),
+        (0.89, 0.88, 'first'),
+        (0.80, 0.79, 'first'),
+        (0.79, 0.80, 'second'),
+        (0.80, 0.80, 'first'),
+        (0.799999, 0.79, None),
+        (0.800001, 0.80, 'first'),
     ]:
         candidates = [Candidate('nonmatching', 'Other', 'Artist', score=0.99),
                       Candidate('first', 'Song', 'Artist', score=first_score),

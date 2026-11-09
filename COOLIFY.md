@@ -22,9 +22,8 @@ After the first deployment, open the terminal for the running `app` service in C
 apple-netease-sync setup
 ```
 
-Complete the prompts for:
+The Apple Music developer token is fetched automatically; no manual entry is needed. Complete the prompts for:
 
-- Apple Music developer token.
 - Discord webhook, if needed.
 - Daily sync time and timezone.
 - Apple Music and Netease playlist pairs.

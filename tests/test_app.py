@@ -24,7 +24,7 @@ def test_background_run_redirects_and_reports_progress_without_blocking(tmp_path
     db = SyncDatabase(tmp_path / 'web.sqlite3')
     service = SyncService(db, apple, netease)
     pair = SyncPair('pair', 'Pair', 'apple', 'netease')
-    monkeypatch.setattr(web, 'runtime', SimpleNamespace(db=db, sync=service, scheduler=None, settings=SimpleNamespace(pairs=lambda: [pair])))
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(refresh_apple_token=lambda: None, db=db, sync=service, scheduler=None, settings=SimpleNamespace(pairs=lambda: [pair])))
     with TestClient(web.app) as client:
         try:
             response = client.post('/pairs/pair/sync', follow_redirects=False)
@@ -70,7 +70,7 @@ def test_dashboard_song_breakdowns_filters_and_packaged_assets(tmp_path, monkeyp
     db.set_source('pair', Track('source', '<script>alert(1)</script>', 'Artist', 'Album', audio_locale='ja', storefront='jp'))
     db.save_mapping('pair', 'source', None, 'ambiguous', error='No unique lyric match', candidates=[{'id':'12','title':'Candidate','artist':'Artist','album':'Album','score':.8}])
     service = SyncService(db, FakeApple(), FakeNetease())
-    monkeypatch.setattr(web, 'runtime', SimpleNamespace(db=db, sync=service, scheduler=None, settings=settings))
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(refresh_apple_token=lambda: None, db=db, sync=service, scheduler=None, settings=settings))
     with TestClient(web.app) as client:
         for route in ('/', '/playlists', '/songs', '/attention', '/activity', '/settings', '/setup/apple', '/pairs/pair/edit', '/pairs/pair/mappings'):
             response = client.get(route)
@@ -110,7 +110,7 @@ def test_stop_route_returns_immediately_and_reverts_after_provider_returns(tmp_p
     db = SyncDatabase(tmp_path / 'stop-web.sqlite3')
     service = SyncService(db, apple, netease)
     pair = SyncPair('pair', 'Pair', 'apple', 'netease')
-    monkeypatch.setattr(web, 'runtime', SimpleNamespace(db=db, sync=service, scheduler=None, settings=SimpleNamespace(pairs=lambda: [pair])))
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(refresh_apple_token=lambda: None, db=db, sync=service, scheduler=None, settings=SimpleNamespace(pairs=lambda: [pair])))
     with TestClient(web.app) as client:
         try:
             location = client.post('/pairs/pair/sync', follow_redirects=False).headers['location']
@@ -132,7 +132,7 @@ def test_attention_correction_returns_to_queue_and_preserves_other_review_routes
     db = SyncDatabase(tmp_path / 'correction-web.sqlite3')
     calls = []
     service = SimpleNamespace(correct=lambda *args: calls.append(args))
-    monkeypatch.setattr(web, 'runtime', SimpleNamespace(db=db, sync=service, scheduler=None, settings=SimpleNamespace(pairs=lambda: [pair])))
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(refresh_apple_token=lambda: None, db=db, sync=service, scheduler=None, settings=SimpleNamespace(pairs=lambda: [pair])))
     with TestClient(web.app) as client:
         for return_to, expected in [('/attention', '/attention'), ('', '/pairs/pair/mappings'), ('https://example.com', '/pairs/pair/mappings')]:
             response = client.post('/pairs/pair/mappings/source/correct', data={'url': 'https://music.163.com/#/song?id=123', 'return_to': return_to}, follow_redirects=False)

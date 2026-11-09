@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 
 import argparse
-import getpass
 import secrets
 
-from .settings import DEFAULT_SETTINGS, SettingsStore
+from .apple_token import fetch_developer_token
+from .settings import SettingsStore
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 def setup(settings: SettingsStore) -> None:
     data = settings.load()
-    data["apple"]["developer_token"] = getpass.getpass("Apple developer token: ").strip()
+    try:
+        data["apple"]["developer_token"] = fetch_developer_token()
+    except Exception:
+        logger.warning("Apple Music developer token fetch failed; the service will retry at launch")
     data["discord"]["webhook_url"] = input("Discord webhook URL (optional): ").strip()
     data["schedule"]["time"] = input("Daily sync time [03:00]: ").strip() or "03:00"
     data["schedule"]["timezone"] = input("Timezone [Asia/Shanghai]: ").strip() or "Asia/Shanghai"
