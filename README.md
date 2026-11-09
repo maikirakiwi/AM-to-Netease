@@ -1,56 +1,42 @@
-# Apple Music → Netease Music sync
+# Apple Music → 网易云音乐
 
-This is a local-network Docker service that copies tracks from private Apple Music playlists into existing Netease playlists. It keeps source-to-destination mappings in SQLite, supports multiple pairs, and runs a daily sync from the dashboard scheduler.
+把 Apple Music 的播放清单分享给网易云的朋友 · [English](README.en.md)
 
-## Deployment
+- Apple Music 用户可以把播放清单同步到自己在网易云音乐的清单，方便把歌分享给你们在用网易云的朋友！
+- 默认每天自动同步。
+- 因歌手和歌名都是转化成原语言再喂给网易云的，无视 Apple Music 的雷霆罗马音/英语翻译。但是还是会出现有些歌不能匹配上的问题，这时候需要自己去网页版网易云找到歌曲的链接然后在程序网页手动关联。
 
-See the [Coolify deployment guide](COOLIFY.md) for Git Repository deployment, persistent storage, and first-time setup.
+程序会尽量根据歌曲语言获取对应地区的原文资料；部分歌曲或地区资料不可用时会使用备用地区。支持多个清单、网页管理、同步进度、手动纠错，以及可选的 Discord 通知。
 
-## Local first run
+## 开始使用
+
+需要 Docker、Apple Music 账号，以及自己可以编辑的网易云歌单。先在网易云创建目标歌单。
+
+**使用 Coolify：** 按照 [Coolify 部署指南](COOLIFY.md) 从 Git 仓库部署，并完成首次设置。
+
+**本地使用：** 在仓库目录运行：
 
 ```bash
+docker compose build
 docker compose run --rm app apple-netease-sync setup
 docker compose up -d
 ```
 
-The local Compose service is reachable through the container network. For a host browser, add a local port mapping such as `127.0.0.1:8008:8008` to the `app` service or use a small Compose override. The setup flow stores credentials and sessions in the persistent `app-data` volume.
+1. 按提示设置同步时间和两边的清单，并扫码登录网易云。Apple Music 开发者令牌会自动获取，无需手动填写。
+2. 打开 [http://localhost:8008](http://localhost:8008)，在设置中完成 Apple Music 授权。
+3. 在 **Playlists** 页面管理清单配对，点击 **Run now** 开始同步。
 
-The service fetches Apple Music’s public web-player developer token automatically at launch and ten minutes before the configured daily sync time, using the configured timezone (including across midnight). It stores the token in the owner-only settings file and updates the active client. If fetching fails, it retains the previous token and logs a warning. You only need to authorize your Apple Music account in the dashboard to obtain a user token. Netease access uses the [`sakarie9/pyncm`](https://github.com/sakarie9/pyncm) adapter and its persisted session. The dashboard can reauthorize Apple Music and update settings after setup.
+默认每天北京时间 **03:00** 自动同步，可以在网页设置中修改时间和时区。需要保留目标歌单已有歌曲、只追加新歌时，将首次同步和后续移除策略都设为 **preserve**。
 
-Search starts with the original Apple title and artist. If metadata matching remains unresolved, it tries the cleaned title with the first extracted performer, then the cleaned title alone. Duplicate queries are skipped, results are merged by Netease song ID, and searching stops at the first confident metadata match. Artist scoring compares normalized performer sets, extracts voice actors from `CV:`/`CV.` credits, and ignores performer order. Featured credits are compared as performers even when one provider puts them in the title. Album comparison ignores trailing `- EP` and `- Single`; recording labels such as TV size, live, game version, and karaoke remain in the title. These changes apply to new or unresolved songs; successful saved mappings keep their existing IDs.
+## 匹配不对怎么办？
 
-A unique candidate whose normalized title and album both match Apple Music is accepted regardless of artist credit or weighted score. This uses the same featured-credit and album release-label normalization described above. Title and album must be nonempty, and the existing 15-second duration check still applies when both durations are known. Multiple qualifying candidates continue through the normal scoring and lyric-review rules.
+打开 **Needs attention**，点击 **Review**，粘贴正确的网易云歌曲链接，再点击 **Apply correction**。如果已经同步的歌曲有误，先在歌曲详情中点击 **Flag as incorrect**，再手动关联。后续同步会保留手动选择。
 
-Netease search logs include the query, response code, candidate count, and attempt number. Empty searches and transient rejection codes get one retry. Invalid or rejected responses are recorded as provider failures instead of being reported as “no candidates.”
+同步在后台运行，可以查看进度；运行中的任务也可以使用 **Stop & revert changes** 停止并撤销本次修改。
 
-When metadata cannot identify a confident match after those searches, the service checks the top 10 combined Netease candidates against the first three nonempty Apple Music lyric lines (or all available lines if fewer than three). A candidate qualifies when any individual Netease lyric line contains at least one complete selected Apple line, allowing additional characters before or after it and ignoring timing tags, punctuation, spacing, and case. A single qualifying candidate is accepted. If multiple candidates match the lyrics, the service selects the one with the highest metadata score as long as that score is at least 80. Equal highest scores use the first candidate in the ranked results. Missing lyrics, no lyric match, or multiple lyric matches whose highest metadata score is below 0.80 leave the song for manual correction in the dashboard. Successful mappings skip lyric lookups on later runs.
+## 数据与更多说明
 
-## Development
+保留 Docker 的 `app-data` 数据卷，里面保存账号授权、设置和歌曲关联。网页没有内置登录，请仅在可信网络使用，或添加外部访问认证。
 
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e '.[test]'
-pytest
-uvicorn music_sync.app:app --reload
-```
-
-## Dashboard and song review
-
-The dashboard provides an overview of saved song mappings, recent run outcomes, playlist connections, and an attention queue. The song library supports title/artist/ID search, status filters, and pagination. Expand a song's details to inspect its Apple metadata, selected storefront, Netease destination, match method, candidate scores, and failure reason.
-
-A mapping marked **Synced** means the service saved a successful match; it is not a separate human verification. If a saved mapping is wrong, use **Flag as incorrect** to hold it for manual review, then paste the correct Netease song URL under **Apply correction**. Flagged mappings stay out of automatic matching until corrected.
-
-Manual dashboard runs execute in the background. Their progress page shows the current song, processed count, items left, and outcomes, and continues updating after a page reload. If a playlist response omits `audioLocale`, the service explicitly requests it from Apple's media API before choosing the metadata storefront. If the CN catalog cannot resolve a song by ID or ISRC, metadata lookup tries Taiwan, Hong Kong, then the source storefront. The actual storefront used is saved with the mapping; empty catalog results produce a descriptive error instead of an indexing failure.
-
-## Stop and revert a running sync
-
-Use **Stop & revert changes** on a run's progress page. The worker finishes its in-flight provider request, stops further processing, then uses its persistent change journal to:
-
-- Remove destination songs added by that run, preserving songs that were already present.
-- Restore destination songs removed during that run's mirror cleanup.
-- Delete newly created mappings and restore mappings that existed before the run.
-
-Restoring removed songs may change their playlist order. A provider error leaves the run in **Revert incomplete**, with the failed operation recorded and a **Retry revert** action. A restart marks an active run **Interrupted**, and its journal remains available for a retry. A run with an unfinished revert blocks another sync for that pair until the revert completes. Keep the service running until the progress page confirms the revert finished.
-
-The journal covers runs created by this version; it cannot undo changes from earlier versions. Already-sent Discord notifications cannot be recalled. Provider requests cannot be forcibly interrupted, so stopping may take as long as the current request.
+- [匹配算法、同步策略与技术说明](DETAILS.md)
+- [Coolify 部署与首次设置](COOLIFY.md)

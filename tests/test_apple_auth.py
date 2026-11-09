@@ -166,3 +166,38 @@ def test_empty_metadata_raises_useful_error_after_bounded_fallbacks(monkeypatch)
     with pytest.raises(RuntimeError, match='metadata unavailable.*cn, tw, hk, us'):
         client.metadata(Track('missing', 'Song', 'Artist', raw={'storefront': 'us'}), 'cn')
     assert calls == ['cn', 'tw', 'hk', 'us']
+
+
+@pytest.mark.parametrize('storefront', ['tw', 'hk'])
+def test_tw_hk_metadata_converts_names_to_simplified_but_preserves_raw(monkeypatch, storefront):
+    from music_sync.models import Track
+    client = AppleMusicClient('developer', 'user')
+    attrs = {'name': '夢裡的愛 (Live)', 'artistName': '許慧欣 / Khalil Fong', 'albumName': '夢想家 The Dreamer'}
+    monkeypatch.setattr(client, '_get', lambda *a, **k: {'data': [{'id': '123', 'attributes': attrs}]})
+    result = client.metadata(Track('123', 'Song', 'Artist'), storefront)
+    assert result.title == '梦里的爱 (Live)'
+    assert result.artist == '许慧欣 / Khalil Fong'
+    assert result.album == '梦想家 The Dreamer'
+    assert result.storefront == storefront
+    assert result.raw['attributes'] == attrs
+    assert attrs['albumName'] == '夢想家 The Dreamer'
+
+
+@pytest.mark.parametrize('storefront', ['cn', 'jp', 'us'])
+def test_other_storefront_metadata_does_not_convert_chinese(monkeypatch, storefront):
+    from music_sync.models import Track
+    client = AppleMusicClient('developer', 'user')
+    monkeypatch.setattr(client, '_get', lambda *a, **k: {'data': [{'id': '123', 'attributes': {'name': '夢', 'artistName': '許慧欣', 'albumName': '愛'}}]})
+    result = client.metadata(Track('123', 'Song', 'Artist'), storefront)
+    assert (result.title, result.artist, result.album) == ('夢', '許慧欣', '愛')
+
+
+def test_cn_fallback_converts_metadata_from_actual_tw_storefront(monkeypatch):
+    from music_sync.models import Track
+    client = AppleMusicClient('developer', 'user')
+    def get(*args, **kwargs):
+        return {'data': []} if kwargs['storefront'] == 'cn' else {'data': [{'id': '123', 'attributes': {'name': '夢', 'artistName': '許慧欣', 'albumName': '愛'}}]}
+    monkeypatch.setattr(client, '_get', get)
+    result = client.metadata(Track('123', 'Song', 'Artist'), 'cn')
+    assert result.storefront == 'tw'
+    assert (result.title, result.artist, result.album) == ('梦', '许慧欣', '爱')

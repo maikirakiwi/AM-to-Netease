@@ -10,6 +10,8 @@ from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree
 
+from opencc import OpenCC
+
 try:
     import httpx
 except ImportError:  # pragma: no cover - used only in dependency-free smoke checks
@@ -19,6 +21,7 @@ from .models import Candidate, Track
 
 
 logger = logging.getLogger(__name__)
+SIMPLIFIED_CHINESE = OpenCC("t2s")
 
 LOCALE_STOREFRONTS = {
     "ja": "jp", "ko": "kr", "zh": "cn", "yue": "hk", "en": "us",
@@ -214,9 +217,14 @@ class AppleMusicClient:
         if item is None:
             raise RuntimeError(f"Apple metadata unavailable for song {catalog_id}: catalog and ISRC lookups returned no song in {', '.join(dict.fromkeys(storefronts))}")
         attrs = item.get("attributes", {})
+        title = attrs.get("name", track.title)
+        artist = attrs.get("artistName", track.artist)
+        album = attrs.get("albumName", track.album)
+        if storefront in {"tw", "hk"}:
+            title, artist, album = (SIMPLIFIED_CHINESE.convert(value) for value in (title, artist, album))
         return Track(
-            id=track.id, title=attrs.get("name", track.title), artist=attrs.get("artistName", track.artist),
-            album=attrs.get("albumName", track.album), duration_ms=attrs.get("durationInMillis", track.duration_ms),
+            id=track.id, title=title, artist=artist,
+            album=album, duration_ms=attrs.get("durationInMillis", track.duration_ms),
             isrc=attrs.get("isrc", track.isrc), url=attrs.get("url", track.url),
             audio_locale=attrs.get("audioLocale", track.audio_locale), storefront=storefront,
             raw={**track.raw, "catalog_id": item.get("id", catalog_id), "attributes": attrs},

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apple-netease-sync"
-version = "1.2.2"
+version = "1.2.5"
 description = "Synchronize Apple Music playlists to Netease Music"
 requires-python = ">=3.12"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
   "fastapi>=0.115,<1",
   "httpx>=0.27,<1",
   "jinja2>=3.1,<4",
+  "opencc-python-reimplemented==0.1.7",
   "python-multipart>=0.0.9,<1",
   "pyncm @ git+https://github.com/sakarie9/pyncm.git",
   "qrcode>=7.4,<9",
