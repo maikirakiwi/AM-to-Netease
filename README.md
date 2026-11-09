@@ -39,7 +39,7 @@ The dashboard provides an overview of saved song mappings, recent run outcomes, 
 
 A mapping marked **Synced** means the service saved a successful match; it is not a separate human verification. If a saved mapping is wrong, use **Flag as incorrect** to hold it for manual review, then paste the correct Netease song URL under **Apply correction**. Flagged mappings stay out of automatic matching until corrected.
 
-Manual dashboard runs execute in the background. Their progress page shows the current song, processed count, items left, and outcomes, and continues updating after a page reload. If a playlist response omits `audioLocale`, the service explicitly requests it from Apple's media API before choosing the metadata storefront.
+Manual dashboard runs execute in the background. Their progress page shows the current song, processed count, items left, and outcomes, and continues updating after a page reload. If a playlist response omits `audioLocale`, the service explicitly requests it from Apple's media API before choosing the metadata storefront. If the CN catalog cannot resolve a song by ID or ISRC, metadata lookup tries Taiwan, Hong Kong, then the source storefront. The actual storefront used is saved with the mapping; empty catalog results produce a descriptive error instead of an indexing failure.
 
 ## Stop and revert a running sync
 

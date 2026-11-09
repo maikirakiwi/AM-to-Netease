@@ -133,3 +133,36 @@ def test_missing_audio_locale_is_explicitly_requested_from_media_api(monkeypatch
     assert client.audio_locale(Track('i.library', 'Song', 'Artist', raw={'catalog_id': '123', 'storefront': 'us'})) == 'ja'
     assert client.audio_locale(Track('123', 'Song', 'Artist', audio_locale='ja')) == 'ja'
     assert len(calls) == 1
+
+
+def test_cn_unavailable_song_uses_taiwan_metadata_after_empty_isrc(monkeypatch):
+    from music_sync.models import Track
+    client = AppleMusicClient('developer', 'user')
+    calls = []
+    def get(path, **kwargs):
+        calls.append((path, kwargs['storefront']))
+        if kwargs['storefront'] == 'cn':
+            if path != '/songs':
+                raise RuntimeError('404')
+            return {'data': []}
+        return {'data': [{'id': '1762980607', 'attributes': {'name': '才二十三', 'artistName': '方大同'}}]}
+    monkeypatch.setattr(client, '_get', get)
+    source = Track('1762980607', '才二十三', 'Khalil Fong', isrc='HKC382400005', audio_locale='zh-Hans-CN', raw={'storefront': 'us'})
+    result = client.metadata(source, 'cn')
+    assert result.artist == '方大同'
+    assert result.storefront == 'tw'
+    assert result.audio_locale == 'zh-Hans-CN'
+    assert calls == [('/songs/1762980607', 'cn'), ('/songs', 'cn'), ('/songs/1762980607', 'tw')]
+
+
+def test_empty_metadata_raises_useful_error_after_bounded_fallbacks(monkeypatch):
+    from music_sync.models import Track
+    client = AppleMusicClient('developer', 'user')
+    calls = []
+    def get(path, **kwargs):
+        calls.append(kwargs['storefront'])
+        return {'data': []}
+    monkeypatch.setattr(client, '_get', get)
+    with pytest.raises(RuntimeError, match='metadata unavailable.*cn, tw, hk, us'):
+        client.metadata(Track('missing', 'Song', 'Artist', raw={'storefront': 'us'}), 'cn')
+    assert calls == ['cn', 'tw', 'hk', 'us']

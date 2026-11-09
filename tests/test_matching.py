@@ -79,3 +79,12 @@ def test_qi_yue_qi_ri_qing_prefers_matching_album_over_first_compilation_result(
     match, ranked = choose(source, candidates)
     assert match.id == '307825'
     assert ranked[0].score == 1.0
+
+
+def test_cai_er_shi_san_can_match_album_release_instead_of_single():
+    source = Track('1762980607', '才二十三', '方大同', '才二十三 - Single', 224499)
+    match, _ = choose(source, [
+        Candidate('2619125556', '才二十三', '方大同', '梦想家 The Dreamer', 224498),
+        Candidate('cover', '才二十三 (Cover 方大同)', '陆屿森', '', 220134),
+    ])
+    assert match and match.id == '2619125556'

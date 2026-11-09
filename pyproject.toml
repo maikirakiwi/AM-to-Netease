@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apple-netease-sync"
-version = "0.1.0"
+version = "1.2.2"
 description = "Synchronize Apple Music playlists to Netease Music"
 requires-python = ">=3.12"
 dependencies = [

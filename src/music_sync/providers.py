@@ -190,16 +190,29 @@ class AppleMusicClient:
 
     def metadata(self, track: Track, storefront: str) -> Track:
         catalog_id = track.raw.get("catalog_id") or track.id
-        try:
-            payload = self._get(f"/songs/{catalog_id}", storefront=storefront)
-            item = payload["data"][0]
-        except Exception:
-            logger.warning("Apple catalog lookup failed: source=%s storefront=%s; trying ISRC when available", track.id, storefront, exc_info=True)
-            if track.isrc:
-                payload = self._get("/songs", storefront=storefront, params={"filter[isrc]": track.isrc})
-                item = payload["data"][0]
-            else:
-                raise
+        requested_storefront = storefront
+        storefronts = [storefront]
+        if storefront == "cn":
+            storefronts.extend(["tw", "hk", track.raw.get("storefront") or "cn"])
+        item = None
+        for storefront in dict.fromkeys(storefronts):
+            try:
+                data = self._get(f"/songs/{catalog_id}", storefront=storefront).get("data", [])
+                item = next(iter(data), None)
+            except Exception:
+                logger.warning("Apple catalog lookup failed: source=%s storefront=%s; trying ISRC when available", track.id, storefront, exc_info=True)
+            if item is None and track.isrc:
+                try:
+                    data = self._get("/songs", storefront=storefront, params={"filter[isrc]": track.isrc}).get("data", [])
+                    item = next(iter(data), None)
+                except Exception:
+                    logger.warning("Apple ISRC lookup failed: source=%s storefront=%s", track.id, storefront, exc_info=True)
+            if item is not None:
+                if storefront != requested_storefront:
+                    logger.info("Apple metadata storefront fallback: source=%s requested=%s used=%s", track.id, requested_storefront, storefront)
+                break
+        if item is None:
+            raise RuntimeError(f"Apple metadata unavailable for song {catalog_id}: catalog and ISRC lookups returned no song in {', '.join(dict.fromkeys(storefronts))}")
         attrs = item.get("attributes", {})
         return Track(
             id=track.id, title=attrs.get("name", track.title), artist=attrs.get("artistName", track.artist),
