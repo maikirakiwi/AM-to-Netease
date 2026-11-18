@@ -4,6 +4,7 @@ import logging
 import base64
 import json
 import time
+import threading
 
 import re
 from typing import Any, Protocol
@@ -247,6 +248,53 @@ class PyncmClient:
         self._session = pyncm.Session()
         if session:
             self._session.load(session)
+        self._request_lock = threading.RLock()
+        self._last_request = 0.0
+        # Keep cookie identity and encrypted headers consistent; issue hana-music-api#32.
+        self._session.UA_DEFAULT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        self._session.UA_EAPI = "NeteaseMusic 10.0.0/5038 (iPhone; iOS 16.2; zh_CN)"
+        self._session.eapi_config.update(os="iPhone OS", appver="10.0.0", osver="16.2", channel="distribution")
+        for cookie in list(self._session.cookies):
+            if cookie.name in {"os", "appver", "osver", "channel", "checkToken"}:
+                self._session.cookies.clear(cookie.domain, cookie.path, cookie.name)
+        for key in ("appver", "osver", "channel", "checkToken"):
+            self._session.weapi_config.pop(key, None)
+        self._session.weapi_config["os"] = "web"
+        self._session.eapi_config.pop("checkToken", None)
+        self._session.headers.pop("X-antiCheatToken", None)
+
+    def _request(self, api, *args, **kwargs):
+        with self._request_lock:
+            for attempt in range(2):
+                time.sleep(max(0.0, 1.0 - (time.monotonic() - self._last_request)))
+                try:
+                    response = api(*args, session=self._session, **kwargs)
+                finally:
+                    self._last_request = time.monotonic()
+                if not isinstance(response, dict) or response.get("code") != 405:
+                    return response
+                if attempt == 0:
+                    logger.warning("Netease rejected request with code 405; cooling down for 10 seconds before one retry")
+                    time.sleep(10)
+            raise RuntimeError(f"Netease request failed (code=405): {response.get('message') or response.get('msg') or 'Request rejected; try later'}")
+
+    def refresh_session(self) -> dict[str, Any]:
+        from pyncm.apis import WeapiCryptoRequest
+
+        @WeapiCryptoRequest
+        def refresh():
+            return "/weapi/login/token/refresh", {}
+
+        with self._request_lock:
+            response = self._request(refresh)
+            if not isinstance(response, dict) or response.get("code") != 200:
+                code = response.get("code") if isinstance(response, dict) else "invalid response"
+                raise RuntimeError(f"Netease session refresh failed (code={code}); QR re-login may be required")
+            # requests merges the refresh endpoint's Set-Cookie headers into the session.
+            csrf = next((c.value for c in self._session.cookies if c.name == "__csrf"), None)
+            if csrf is not None:
+                self._session.csrf_token = csrf
+            return self.session()
 
     def session(self) -> dict[str, Any]:
         return self._session.dump()
@@ -277,22 +325,22 @@ class PyncmClient:
         raise TimeoutError("Netease QR login timed out; run setup again for a new QR code")
 
     def playlist_tracks(self, playlist: str) -> list[Candidate]:
-        payload = self.playlist_api.GetPlaylistInfo(playlist_id(playlist), session=self._session)
+        payload = self._request(self.playlist_api.GetPlaylistInfo, playlist_id(playlist))
         ids = [item["id"] for item in payload["playlist"]["trackIds"]]
         songs = []
         for offset in range(0, len(ids), 500):
-            songs.extend(self.track_api.GetTrackDetail(ids[offset:offset + 500], session=self._session)["songs"])
+            songs.extend(self._request(self.track_api.GetTrackDetail, ids[offset:offset + 500])["songs"])
         return [self._track(song) for song in songs]
 
     def search(self, query: str) -> list[Candidate]:
         for attempt in range(2):
-            payload = self.search_api.GetSearchResult(query, limit=30, session=self._session)
+            payload = self._request(self.search_api.GetSearchResult, query, limit=30)
             if not isinstance(payload, dict):
                 raise RuntimeError("Netease search returned an invalid response")
             code = payload.get("code")
             # The fork's decrypted overseas responses omit code and set abroad=True.
             if code != 200 and not (code is None and payload.get("abroad") is True):
-                if attempt == 0 and code in {405, 429, 500, 502, 503, 504}:
+                if attempt == 0 and code in {429, 500, 502, 503, 504}:
                     logger.warning("Netease search rejected; retrying: query=%r code=%s", query, code)
                     time.sleep(1)
                     continue
@@ -311,12 +359,12 @@ class PyncmClient:
             return [self._track(song) for song in songs]
 
     def song(self, netease_id: str) -> Candidate:
-        payload = self.track_api.GetTrackDetail([netease_id], session=self._session)
+        payload = self._request(self.track_api.GetTrackDetail, [netease_id])
         songs = payload.get("songs", payload)
         return self._track(songs[0])
 
     def lyrics(self, netease_id: str) -> str:
-        payload = self.track_api.GetTrackLyrics(netease_id, session=self._session)
+        payload = self._request(self.track_api.GetTrackLyrics, netease_id)
         if payload.get("code") != 200:
             raise RuntimeError(f"Netease lyrics lookup failed ({payload.get('code')})")
         return (payload.get("lrc") or {}).get("lyric", "")
@@ -328,8 +376,8 @@ class PyncmClient:
         self._modify(playlist, netease_id, "del")
 
     def _modify(self, playlist: str, netease_id: str, operation: str) -> None:
-        response = self.playlist_api.SetManipulatePlaylistTracks(
-            [netease_id], playlist_id(playlist), op=operation, session=self._session
+        response = self._request(self.playlist_api.SetManipulatePlaylistTracks,
+            [netease_id], playlist_id(playlist), op=operation
         )
         if response.get("code") != 200:
             raise RuntimeError(f"Netease playlist {operation} failed: {response.get('message', response.get('code'))}")

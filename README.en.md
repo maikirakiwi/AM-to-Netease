@@ -26,7 +26,7 @@ docker compose up -d
 2. Open [http://localhost:8008](http://localhost:8008) and authorize Apple Music from the settings page.
 3. Manage playlist pairs under **Playlists** and select **Run now** to start syncing.
 
-The default schedule is **03:00 Asia/Shanghai every day**. Change the time and timezone in the dashboard. To keep existing destination songs and only add new ones, set both the initial policy and removal policy to **preserve**.
+The default schedule is **03:00 Asia/Shanghai every day**. Change the time and timezone in the dashboard. The Netease session refreshes at startup and ten minutes before the daily sync; multiple playlists sync one at a time. To keep existing destination songs and only add new ones, set both the initial policy and removal policy to **preserve**.
 
 ## Fix a song match
 

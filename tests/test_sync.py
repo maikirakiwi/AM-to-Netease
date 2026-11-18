@@ -390,3 +390,60 @@ def test_exact_title_artist_skips_unmatched_lyrics_and_saves_mapping(tmp_path):
     mapping = service.db.mapping('pair', 'apple-1')
     assert mapping['dest_id'] == 'first'
     assert mapping['match_method'] == 'metadata'
+
+
+def test_different_playlist_runs_are_serial_and_waiting_run_can_be_cancelled(tmp_path):
+    import threading
+    apple, netease = FakeApple(), FakeNetease()
+    service = SyncService(SyncDatabase(tmp_path / 'serial.sqlite3'), apple, netease)
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    original = apple.tracks
+    def tracks(playlist):
+        calls.append(playlist)
+        if playlist == 'first':
+            entered.set()
+            assert release.wait(5)
+        return original(playlist)
+    apple.tracks = tracks
+    first = SyncPair('first', 'First', 'first', 'netease')
+    second = SyncPair('second', 'Second', 'second', 'netease')
+    try:
+        first_run = service.sync(first, background=True)
+        assert entered.wait(2)
+        second_run = service.sync(second, background=True)
+        assert calls == ['first']
+        assert service.db.run(second_run.run_id)['status'] == 'running'
+        service.stop_and_revert(second, second_run.run_id)
+        assert wait_for_run(service.db, second_run.run_id)['status'] == 'cancelled'
+        assert calls == ['first']
+    finally:
+        release.set()
+    assert wait_for_run(service.db, first_run.run_id)['status'] == 'success'
+    assert service.sync(second).status == 'success'
+    assert calls == ['first', 'second']
+
+
+def test_waiting_playlist_starts_after_active_playlist_finishes(tmp_path):
+    import threading
+    apple, netease = FakeApple(), FakeNetease()
+    service = SyncService(SyncDatabase(tmp_path / 'serial-success.sqlite3'), apple, netease)
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def tracks(playlist):
+        calls.append(playlist)
+        if playlist == 'first':
+            entered.set()
+            assert release.wait(5)
+        return [apple.source]
+    apple.tracks = tracks
+    try:
+        first = service.sync(SyncPair('first', 'First', 'first', 'n'), background=True)
+        assert entered.wait(2)
+        second = service.sync(SyncPair('second', 'Second', 'second', 'n'), background=True)
+        assert calls == ['first']
+    finally:
+        release.set()
+    assert wait_for_run(service.db, first.run_id)['status'] == 'success'
+    assert wait_for_run(service.db, second.run_id)['status'] == 'success'
+    assert calls == ['first', 'second']

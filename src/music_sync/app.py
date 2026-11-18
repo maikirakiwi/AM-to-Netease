@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import json
 from contextlib import asynccontextmanager
@@ -30,6 +31,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 class Runtime:
+    _credential_lock = threading.RLock()
+
     def __init__(self) -> None:
         self.settings = SettingsStore()
         self.db = SyncDatabase()
@@ -55,7 +58,8 @@ class Runtime:
                 self.sync = SyncService(self.db, apple_client, netease_client, DiscordNotifier(config.get("discord", {}).get("webhook_url", "")))
                 if previous_sync:
                     self.sync._locks = previous_sync._locks
-            self.scheduler = SchedulerService(self.settings, self.sync, self.refresh_apple_token)
+                    self.sync._sync_lock = previous_sync._sync_lock
+            self.scheduler = SchedulerService(self.settings, self.sync, self.refresh_apple_token, self.refresh_netease_session)
             if self.started:
                 self.scheduler.start()
         except (SettingsError, RuntimeError):
@@ -66,9 +70,10 @@ class Runtime:
     def refresh_apple_token(self) -> None:
         try:
             token = fetch_developer_token()
-            data = self.settings.load()
-            data["apple"]["developer_token"] = token
-            self.settings.save(data)
+            with self._credential_lock:
+                data = self.settings.load()
+                data["apple"]["developer_token"] = token
+                self.settings.save(data)
             if self.sync:
                 self.sync.apple = AppleMusicClient(token, data["apple"]["music_user_token"])
             elif data["apple"].get("music_user_token"):
@@ -78,6 +83,20 @@ class Runtime:
             # Keep saved credentials and the active client usable during an Apple outage.
             logger.warning("Apple Music developer token refresh failed; keeping the previous token")
 
+    def refresh_netease_session(self) -> None:
+        if not self.sync:
+            return
+        try:
+            with self.sync._sync_lock:
+                session = self.sync.netease.refresh_session()
+                with self._credential_lock:
+                    data = self.settings.load()
+                    data["netease"]["session"] = session
+                    self.settings.save(data)
+            logger.info("Netease session refreshed and saved")
+        except Exception:
+            logger.warning("Netease session refresh failed; retaining saved session. QR re-login may be required")
+
 
 runtime = Runtime()
 
@@ -85,6 +104,7 @@ runtime = Runtime()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await run_in_threadpool(runtime.refresh_apple_token)
+    await run_in_threadpool(runtime.refresh_netease_session)
     runtime.started = True
     if runtime.scheduler:
         runtime.scheduler.start()

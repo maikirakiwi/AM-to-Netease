@@ -94,12 +94,13 @@ def test_launch_refreshes_before_scheduler_starts(tmp_path, monkeypatch):
     events = []
     runtime = SimpleNamespace(
         refresh_apple_token=lambda: events.append('refresh'),
+        refresh_netease_session=lambda: events.append('netease-refresh'),
         scheduler=SimpleNamespace(start=lambda: events.append('start'), stop=lambda: events.append('stop')),
     )
     monkeypatch.setattr(web, 'runtime', runtime)
     with TestClient(web.app):
-        assert events == ['refresh', 'start']
-    assert events == ['refresh', 'start', 'stop']
+        assert events == ['refresh', 'netease-refresh', 'start']
+    assert events == ['refresh', 'netease-refresh', 'start', 'stop']
 
 
 def test_settings_save_preserves_automatic_token(tmp_path, monkeypatch):
@@ -109,7 +110,7 @@ def test_settings_save_preserves_automatic_token(tmp_path, monkeypatch):
     config = copy.deepcopy(DEFAULT_SETTINGS)
     config['apple']['developer_token'] = 'automatic'
     settings.save(config)
-    monkeypatch.setattr(web, 'runtime', SimpleNamespace(refresh_apple_token=lambda: None, scheduler=None, settings=settings, rebuild=lambda: None))
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(refresh_netease_session=lambda: None, refresh_apple_token=lambda: None, scheduler=None, settings=settings, rebuild=lambda: None))
     with TestClient(web.app) as client:
         response = client.post('/settings', data={'schedule_time': '00:05', 'timezone': 'Asia/Shanghai'}, follow_redirects=False)
     assert response.status_code == 303

@@ -23,6 +23,7 @@ class SyncService:
         self.db, self.apple, self.netease = db, apple, netease
         self.notifier = notifier or DiscordNotifier()
         self._locks: dict[str, threading.Lock] = {}
+        self._sync_lock = threading.RLock()
 
     def sync(self, pair: SyncPair, *, background: bool = False) -> SyncResult:
         lock = self._locks.setdefault(pair.id, threading.Lock())
@@ -67,7 +68,12 @@ class SyncService:
 
     def _run(self, pair: SyncPair, lock: threading.Lock, run_id: int) -> SyncResult:
         result = SyncResult(run_id, "running")
+        acquired = False
         try:
+            self.db.update_run(run_id, current_source_title="Waiting for another playlist sync to finish")
+            while not acquired:
+                self._check_cancel(run_id)
+                acquired = self._sync_lock.acquire(timeout=0.2)
             self._check_cancel(run_id)
             source_tracks = self.apple.tracks(pair.apple_playlist)
             self._check_cancel(run_id)
@@ -194,6 +200,8 @@ class SyncService:
                 self.db.finish_run(run_id, "failed", error=str(exc), added=result.added, skipped=result.skipped, removed=result.removed, failed=result.failed, ambiguous=result.ambiguous)
             return result
         finally:
+            if acquired:
+                self._sync_lock.release()
             lock.release()
 
     def stop_and_revert(self, pair: SyncPair, run_id: int) -> None:
@@ -215,7 +223,8 @@ class SyncService:
         self.db.update_run(run_id, status="reverting", cancel_requested=1)
         def retry():
             try:
-                self._rollback(pair, run_id)
+                with self._sync_lock:
+                    self._rollback(pair, run_id)
             finally:
                 lock.release()
         try:
@@ -293,6 +302,9 @@ class SyncService:
         lock = self._locks.setdefault(pair.id, threading.Lock())
         if not lock.acquire(blocking=False):
             raise ValueError("Stop the active sync before correcting songs")
+        if not self._sync_lock.acquire(blocking=False):
+            lock.release()
+            raise ValueError("Wait for the active playlist sync to finish before correcting songs")
         try:
             mapping = self.db.mapping(pair.id, source_id)
             song = self.netease.song(netease_id)
@@ -308,6 +320,7 @@ class SyncService:
             self.db.save_mapping(pair.id, source_id, netease_id, "synced", manual=True, destination=self._candidate_json(song), match_method="manual")
             self.notifier.send("Manual Netease correction applied", {"pair": pair.name, "source_id": source_id, "netease": f"https://music.163.com/#/song?id={netease_id}"})
         finally:
+            self._sync_lock.release()
             lock.release()
 
     def flag_incorrect(self, pair: SyncPair, source_id: str) -> None:
