@@ -131,11 +131,139 @@ def test_attention_correction_returns_to_queue_and_preserves_other_review_routes
     pair = SyncPair('pair', 'Pair', 'apple', 'netease')
     db = SyncDatabase(tmp_path / 'correction-web.sqlite3')
     calls = []
-    service = SimpleNamespace(correct=lambda *args: calls.append(args))
+    service = SimpleNamespace(correct=lambda *args, **kwargs: calls.append((args, kwargs)) or 42)
     monkeypatch.setattr(web, 'runtime', SimpleNamespace(refresh_netease_session=lambda: None, refresh_apple_token=lambda: None, db=db, sync=service, scheduler=None, settings=SimpleNamespace(pairs=lambda: [pair])))
     with TestClient(web.app) as client:
         for return_to, expected in [('/attention', '/attention'), ('', '/pairs/pair/mappings'), ('https://example.com', '/pairs/pair/mappings')]:
             response = client.post('/pairs/pair/mappings/source/correct', data={'url': 'https://music.163.com/#/song?id=123', 'return_to': return_to}, follow_redirects=False)
             assert response.status_code == 303
-            assert response.headers['location'] == expected
-        assert calls == [(pair, 'source', '123')] * 3
+            assert response.headers['location'] == expected + '?correction_run=42'
+        assert calls == [((pair, 'source', '123'), {'background': True})] * 3
+
+
+def test_manual_correction_returns_before_provider_and_dashboard_stays_responsive(tmp_path, monkeypatch):
+    from music_sync import app as web
+    from test_sync import wait_for_run
+    apple, netease = FakeApple(), FakeNetease()
+    db = SyncDatabase(tmp_path / 'background-correction.sqlite3')
+    db.set_source('pair', apple.source)
+    db.save_mapping('pair', apple.source.id, None, 'ambiguous')
+    service = SyncService(db, apple, netease)
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    entered, release = threading.Event(), threading.Event()
+    original = netease.song
+    def song(song_id):
+        entered.set()
+        assert release.wait(5)
+        return original(song_id)
+    netease.song = song
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(refresh_netease_session=lambda: None, refresh_apple_token=lambda: None,
+                                                     db=db, sync=service, scheduler=None, settings=SimpleNamespace(pairs=lambda: [pair])))
+    with TestClient(web.app) as client:
+        try:
+            response = client.post('/pairs/pair/mappings/apple-1/correct', data={'url': 'https://music.163.com/#/song?id=123', 'return_to': '/attention'}, follow_redirects=False)
+            assert response.status_code == 303
+            assert entered.wait(2)
+            run_id = int(response.headers['location'].split('=')[1])
+            assert client.get('/api/runs/' + str(run_id)).json()['status'] == 'running'
+            page = client.get(response.headers['location'])
+            assert page.status_code == 200
+            assert 'id="correction-status"' in page.text
+            assert client.get('/healthz').status_code == 200
+            assert client.get('/playlists').status_code == 200
+            duplicate = client.post('/pairs/pair/mappings/apple-1/correct', data={'url': '123'}, follow_redirects=False)
+            assert duplicate.status_code == 400
+        finally:
+            release.set()
+        assert wait_for_run(db, run_id)['status'] == 'success'
+        assert db.mapping('pair', 'apple-1')['dest_id'] == '123'
+        assert '0 results' in client.get('/attention').text
+
+
+def test_netease_qr_is_displayed_and_session_saved_only_after_confirmation(tmp_path, monkeypatch):
+    import base64
+    import copy
+    import re
+    from music_sync import app as web
+    from music_sync.settings import DEFAULT_SETTINGS, SettingsStore
+    settings = SettingsStore(tmp_path / 'settings.json')
+    settings.save(copy.deepcopy(DEFAULT_SETTINGS))
+    states = iter([801, 802, 803])
+    rebuilds = []
+    fake = SimpleNamespace(start_login_qr=lambda: ('private-key', 'https://music.163.com/login?codekey=private-key'),
+                           check_login_qr=lambda key: next(states), session=lambda: {'cookie': 'secret'})
+    monkeypatch.setattr(web, 'PyncmClient', lambda: fake)
+    monkeypatch.setattr(web, '_netease_login', {})
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(settings=settings, db=SyncDatabase(tmp_path / 'qr.sqlite3'), sync=None,
+                      scheduler=None, _credential_lock=threading.RLock(), rebuild=lambda: rebuilds.append(True),
+                      refresh_apple_token=lambda: None, refresh_netease_session=lambda: None))
+    with TestClient(web.app) as client:
+        page = client.post('/setup/netease')
+        assert page.status_code == 200
+        assert 'alt="Netease Music login QR code"' in page.text
+        svg = base64.b64decode(re.search('data:image/svg\\+xml;base64,([^" ]+)', page.text)[1])
+        assert b'<svg' in svg and b'<path' in svg
+        attempt = re.search('data-attempt="([^"]+)"', page.text)[1]
+        assert not settings.load()['netease']['session']
+        for expected in ['waiting', 'scanned', 'authorized', 'authorized']:
+            result = client.post(f'/setup/netease/{attempt}/check')
+            assert result.json() == {'status': expected}
+            assert 'secret' not in result.text
+        assert settings.load()['netease']['session'] == {'cookie': 'secret'}
+        assert rebuilds == [True]
+        assert client.get('/static/netease_auth.js').status_code == 200
+        assert client.post('/setup/netease/unknown/check').status_code == 410
+        client.post('/setup/netease')
+        assert client.post(f'/setup/netease/{attempt}/check').status_code == 410
+
+
+def test_netease_qr_expiry_and_failure_keep_saved_session(tmp_path, monkeypatch):
+    import copy
+    from music_sync import app as web
+    from music_sync.settings import DEFAULT_SETTINGS, SettingsStore
+    settings = SettingsStore(tmp_path / 'settings.json')
+    config = copy.deepcopy(DEFAULT_SETTINGS)
+    config['netease']['session'] = {'old': 'session'}
+    settings.save(config)
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(settings=settings, refresh_apple_token=lambda: None,
+                                                     refresh_netease_session=lambda: None, scheduler=None))
+    def fail(key):
+        raise RuntimeError('Provider error')
+    with TestClient(web.app) as client:
+        for code, expected in [(800, 'expired'), (None, 'failed')]:
+            fake = SimpleNamespace(check_login_qr=(lambda key: code) if code else fail)
+            monkeypatch.setattr(web, '_netease_login', dict(id='attempt', client=fake, key='key', status='waiting', expires=float('inf')))
+            assert client.post('/setup/netease/attempt/check').json() == {'status': expected}
+        monkeypatch.setattr(web, '_netease_login', dict(id='attempt', client=None, key='key', status='waiting', expires=0))
+        assert client.post('/setup/netease/attempt/check').json() == {'status': 'expired'}
+        assert settings.load()['netease']['session'] == {'old': 'session'}
+
+
+def test_unavailable_option_removes_attention_and_is_visible_in_library(tmp_path, monkeypatch):
+    import copy
+    from music_sync import app as web
+    from music_sync.settings import DEFAULT_SETTINGS, SettingsStore
+    from test_sync import wait_for_run
+    settings = SettingsStore(tmp_path / 'settings.json')
+    settings.save(copy.deepcopy(DEFAULT_SETTINGS))
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    settings.upsert_pair(pair)
+    db = SyncDatabase(tmp_path / 'ignored-web.sqlite3')
+    apple, netease = FakeApple(), FakeNetease()
+    db.set_source(pair.id, apple.source)
+    db.save_mapping(pair.id, apple.source.id, None, 'ambiguous')
+    monkeypatch.setattr(web, 'runtime', SimpleNamespace(settings=settings, db=db, sync=SyncService(db, apple, netease),
+                      scheduler=None, refresh_apple_token=lambda: None, refresh_netease_session=lambda: None))
+    with TestClient(web.app) as client:
+        assert 'Not available on Netease' in client.get('/attention').text
+        response = client.post('/pairs/pair/mappings/apple-1/ignore', data={'return_to': '/attention'}, follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers['location'].startswith('/attention?correction_run=')
+        assert wait_for_run(db, int(response.headers['location'].split('=')[1]))['status'] == 'success'
+        assert '0 results' in client.get('/attention').text
+        library = client.get('/songs?state=ignored')
+        assert '1 results' in library.text and 'Not available' in library.text
+        assert 'Apply correction' in client.get('/pairs/pair/mappings?state=ignored').text
+        assert web.statistics(web.all_songs([pair]))['attention'] == 0
+        assert web.pair_cards([pair], web.all_songs([pair]))[0]['attention'] == 0
+        assert client.get('/').status_code == 200

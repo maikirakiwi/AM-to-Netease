@@ -88,6 +88,9 @@ class SyncService:
                 self.db.update_run(run_id, current_source_id=source.id, current_source_title=f"{source.title} — {source.artist}")
                 try:
                     mapping = self.db.mapping(pair.id, source.id)
+                    if mapping and mapping["state"] == "ignored":
+                        result.skipped += 1
+                        continue
                     if mapping and mapping["state"] == "incorrect":
                         unresolved = True
                         result.ambiguous += 1
@@ -298,29 +301,84 @@ class SyncService:
             detail += "; lyric lookup failed for " + ", ".join(unavailable)
         return None, reason + detail
 
-    def correct(self, pair: SyncPair, source_id: str, netease_id: str) -> None:
+    def correct(self, pair: SyncPair, source_id: str, netease_id: str | None, *, background: bool = False) -> int:
         lock = self._locks.setdefault(pair.id, threading.Lock())
         if not lock.acquire(blocking=False):
-            raise ValueError("Stop the active sync before correcting songs")
-        if not self._sync_lock.acquire(blocking=False):
-            lock.release()
-            raise ValueError("Wait for the active playlist sync to finish before correcting songs")
+            raise ValueError("Wait for this playlist's active task before correcting songs")
         try:
+            previous = self.db.latest_run(pair.id)
+            if previous and previous["status"] in {"rollback_failed", "interrupted"} and self.db.changes(previous["id"]):
+                raise ValueError("Complete the previous run's revert before correcting songs")
+            if not self.db.mapping(pair.id, source_id):
+                raise ValueError("Song mapping not found")
+            run_id = self.db.start_run(pair.id)
+            self.db.update_run(run_id, total=1, current_source_id=source_id,
+                               current_source_title=f"Manual correction: {source_id} (waiting for other playlists)")
+        except Exception:
+            lock.release()
+            raise
+        if background:
+            try:
+                threading.Thread(target=self._correct_run, args=(pair, source_id, netease_id, lock, run_id), daemon=True).start()
+            except Exception:
+                self.db.finish_run(run_id, "failed", error="Could not start correction worker")
+                lock.release()
+                raise
+        else:
+            self._correct_run(pair, source_id, netease_id, lock, run_id, raise_errors=True)
+        return run_id
+
+    def _correct_run(self, pair: SyncPair, source_id: str, netease_id: str | None, lock: threading.Lock,
+                     run_id: int, *, raise_errors: bool = False) -> None:
+        acquired = False
+        added = removed = 0
+        try:
+            while not acquired:
+                self._check_cancel(run_id)
+                acquired = self._sync_lock.acquire(timeout=0.2)
+            self._check_cancel(run_id)
             mapping = self.db.mapping(pair.id, source_id)
+            if netease_id is None:
+                with self.db.lock:
+                    self._check_cancel(run_id)
+                    self._save_mapping(run_id, pair, source_id, None, "ignored", manual=True, match_method="unavailable")
+                    self.db.finish_run(run_id, "success", processed=1, skipped=1,
+                                       current_source_id=None, current_source_title=None)
+                return
             song = self.netease.song(netease_id)
+            self.db.update_run(run_id, current_source_title=f"Manual correction: {song.title} — {song.artist}")
             current = {track.id for track in self.netease.playlist_tracks(pair.netease_playlist)}
             if netease_id not in current:
-                self.netease.add(pair.netease_playlist, netease_id)
+                self._modify(run_id, pair, netease_id, "add")
+                added = 1
             if netease_id not in {track.id for track in self.netease.playlist_tracks(pair.netease_playlist)}:
                 raise RuntimeError("Netease did not confirm the corrected song")
             if mapping and mapping["dest_id"] and mapping["dest_id"] != netease_id:
                 shared = any(row["source_id"] != source_id and row["dest_id"] == mapping["dest_id"] for row in self.db.mappings(pair.id))
                 if not shared and mapping["dest_id"] in current:
-                    self.netease.remove(pair.netease_playlist, mapping["dest_id"])
-            self.db.save_mapping(pair.id, source_id, netease_id, "synced", manual=True, destination=self._candidate_json(song), match_method="manual")
+                    self._modify(run_id, pair, mapping["dest_id"], "remove")
+                    removed = 1
+            with self.db.lock:
+                self._check_cancel(run_id)
+                self._save_mapping(run_id, pair, source_id, netease_id, "synced", manual=True,
+                                   destination=self._candidate_json(song), match_method="manual")
+                self.db.finish_run(run_id, "success", processed=1, added=added, removed=removed,
+                                   current_source_id=None, current_source_title=None)
             self.notifier.send("Manual Netease correction applied", {"pair": pair.name, "source_id": source_id, "netease": f"https://music.163.com/#/song?id={netease_id}"})
+        except SyncCancelled:
+            self._rollback(pair, run_id)
+        except Exception as exc:
+            logger.exception("Manual correction failed: run=%s pair=%s source=%s", run_id, pair.id, source_id)
+            if self.db.run(run_id)["cancel_requested"]:
+                self._rollback(pair, run_id)
+            else:
+                self.db.finish_run(run_id, "failed", failed=1, added=added, removed=removed, error=str(exc))
+                self.notifier.send("Manual Netease correction failed", {"pair": pair.name, "source_id": source_id, "reason": str(exc)})
+            if raise_errors:
+                raise
         finally:
-            self._sync_lock.release()
+            if acquired:
+                self._sync_lock.release()
             lock.release()
 
     def flag_incorrect(self, pair: SyncPair, source_id: str) -> None:

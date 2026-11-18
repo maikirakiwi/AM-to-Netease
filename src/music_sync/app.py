@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import logging
+import base64
+import io
+import secrets
+import time
 import threading
 
 import json
@@ -155,7 +159,7 @@ def all_songs(pairs: list[SyncPair]) -> list[dict]:
 
 
 def statistics(songs: list[dict]) -> dict:
-    counts = {state: sum(song["state"] == state for song in songs) for state in ("synced", "ambiguous", "failed", "incorrect")}
+    counts = {state: sum(song["state"] == state for song in songs) for state in ("synced", "ambiguous", "failed", "incorrect", "ignored")}
     counts.update(total=len(songs), manual=sum(song["state"] == "synced" and song["manual"] for song in songs))
     counts["attention"] = counts["ambiguous"] + counts["failed"] + counts["incorrect"]
     counts["rate"] = round(counts["synced"] / len(songs) * 100) if songs else 0
@@ -180,7 +184,7 @@ def pair_cards(pairs: list[SyncPair], songs: list[dict]) -> list[dict]:
     for pair in pairs:
         own = [song for song in songs if song["pair_id"] == pair.id]
         cards.append(dict(pair=pair, synced=sum(song["state"] == "synced" for song in own),
-                          attention=sum(song["state"] != "synced" for song in own), run=runtime.db.latest_run(pair.id)))
+                          attention=sum(song["state"] not in {"synced", "ignored"} for song in own), run=runtime.db.latest_run(pair.id)))
     return cards
 
 
@@ -221,7 +225,7 @@ def dashboard() -> HTMLResponse:
         runs = runs_with_names(pairs)
         chart = list(reversed(runs[:14]))
         return render("overview.html", "Overview", config=runtime.settings.load(), pairs=pairs,
-                      stats=stats, attention=[s for s in songs if s["state"] != "synced"], runs=runs,
+                      stats=stats, attention=[s for s in songs if s["state"] not in {"synced", "ignored"}], runs=runs,
                       chart=chart, chart_max=max([r["added"] + r["skipped"] + r["failed"] + r["ambiguous"] for r in chart] or [1]) or 1,
                       pair_cards=pair_cards(pairs, songs))
     except SettingsError as exc:
@@ -333,14 +337,14 @@ def delete_pair(pair_id: str) -> RedirectResponse:
     return RedirectResponse("/playlists", status_code=303)
 
 
-def song_page(pair: SyncPair | None, state: str, query: str, page_number: int, attention: bool = False) -> HTMLResponse:
-    if state not in {"all", "synced", "ambiguous", "failed", "incorrect"}:
+def song_page(pair: SyncPair | None, state: str, query: str, page_number: int, attention: bool = False, correction_run: int | None = None) -> HTMLResponse:
+    if state not in {"all", "synced", "ambiguous", "failed", "incorrect", "ignored"}:
         raise HTTPException(400, "Unknown song state")
     pairs = [pair] if pair else configured_pairs()
     songs = all_songs(pairs)
     if attention:
-        songs = [song for song in songs if song["state"] != "synced"]
-    counts = {key: sum(song["state"] == key for song in songs) for key in ("synced", "ambiguous", "failed", "incorrect")}
+        songs = [song for song in songs if song["state"] not in {"synced", "ignored"}]
+    counts = {key: sum(song["state"] == key for song in songs) for key in ("synced", "ambiguous", "failed", "incorrect", "ignored")}
     counts["all"] = len(songs)
     selected = [song for song in songs if (state == "all" or song["state"] == state) and
                 (not query or query.casefold() in " ".join(str(song.get(key) or "") for key in ("title", "artist", "source_id", "dest_id", "pair_name")).casefold())]
@@ -348,10 +352,13 @@ def song_page(pair: SyncPair | None, state: str, query: str, page_number: int, a
     total_pages = max(1, (total + 49) // 50)
     page_number = min(max(page_number, 1), total_pages)
     base_url = f"/pairs/{pair.id}/mappings" if pair else "/attention" if attention else "/songs"
+    correction = runtime.db.run(correction_run) if correction_run is not None else None
+    if correction and (pair and correction["pair_id"] != pair.id):
+        raise HTTPException(404, "Correction does not belong to this playlist")
     return render("songs.html", pair.name + " · Song mappings" if pair else "Needs attention" if attention else "Song library",
                   "attention" if attention else "songs", pair=pair, songs=selected[(page_number - 1) * 50:page_number * 50],
                   description="Review song mappings, inspect match evidence, and correct destination songs.",
-                  state=state, query=query, counts=counts, total_results=total, total_pages=total_pages, page_number=page_number, base_url=base_url)
+                  correction=dict(correction) if correction else None, state=state, query=query, counts=counts, total_results=total, total_pages=total_pages, page_number=page_number, base_url=base_url)
 
 
 @app.get("/songs")
@@ -360,13 +367,13 @@ def songs(state: str = "all", q: str = "", p: int = 1) -> HTMLResponse:
 
 
 @app.get("/attention")
-def attention(state: str = "all", q: str = "", p: int = 1) -> HTMLResponse:
-    return song_page(None, state, q, p, attention=True)
+def attention(state: str = "all", q: str = "", p: int = 1, correction_run: int | None = None) -> HTMLResponse:
+    return song_page(None, state, q, p, attention=True, correction_run=correction_run)
 
 
 @app.get("/pairs/{pair_id}/mappings")
-def mappings(pair_id: str, state: str = "all", q: str = "", p: int = 1) -> HTMLResponse:
-    return song_page(get_pair(pair_id), state, q, p)
+def mappings(pair_id: str, state: str = "all", q: str = "", p: int = 1, correction_run: int | None = None) -> HTMLResponse:
+    return song_page(get_pair(pair_id), state, q, p, correction_run=correction_run)
 
 
 @app.post("/pairs/{pair_id}/mappings/{source_id}/correct")
@@ -375,11 +382,25 @@ def correct_mapping(pair_id: str, source_id: str, url: str = Form(...), return_t
         raise HTTPException(503, "Provider setup is incomplete")
     pair = get_pair(pair_id)
     try:
-        runtime.sync.correct(pair, source_id, song_id(url))
+        run_id = runtime.sync.correct(pair, source_id, song_id(url), background=True)
     except Exception as exc:
         logger.exception("Manual correction failed: pair=%s source=%s", pair_id, source_id)
         raise HTTPException(400, str(exc)) from exc
-    return RedirectResponse("/attention" if return_to == "/attention" else f"/pairs/{pair_id}/mappings", status_code=303)
+    destination = "/attention" if return_to == "/attention" else f"/pairs/{pair_id}/mappings"
+    return RedirectResponse(f"{destination}?correction_run={run_id}", status_code=303)
+
+
+@app.post("/pairs/{pair_id}/mappings/{source_id}/ignore")
+def ignore_mapping(pair_id: str, source_id: str, return_to: str = Form("")) -> RedirectResponse:
+    if not runtime.sync:
+        raise HTTPException(503, "Provider setup is incomplete")
+    pair = get_pair(pair_id)
+    try:
+        run_id = runtime.sync.correct(pair, source_id, None, background=True)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    destination = "/attention" if return_to == "/attention" else f"/pairs/{pair_id}/mappings"
+    return RedirectResponse(f"{destination}?correction_run={run_id}", status_code=303)
 
 
 @app.post("/pairs/{pair_id}/mappings/{source_id}/flag")
@@ -433,15 +454,57 @@ def save_settings(webhook_url: str = Form(""), schedule_time: str = Form("03:00"
     return RedirectResponse("/settings", status_code=303)
 
 
+# Only the latest QR attempt is retained; cookies never leave the server.
+_netease_login: dict = {}
+_netease_login_lock = threading.Lock()
+
+
 @app.post("/setup/netease")
-def netease_setup() -> RedirectResponse:
+def netease_setup() -> HTMLResponse:
+    import qrcode
+    from qrcode.image.svg import SvgPathImage
+
     try:
         client = PyncmClient()
-        data = runtime.settings.load()
-        data["netease"]["session"] = client.login_qr()
-        runtime.settings.save(data)
-        runtime.rebuild()
+        key, url = client.start_login_qr()
+        image = io.BytesIO()
+        qrcode.make(url, image_factory=SvgPathImage).save(image)
+        attempt = secrets.token_urlsafe(24)
+        with _netease_login_lock:
+            _netease_login.clear()
+            _netease_login.update(id=attempt, client=client, key=key, expires=time.monotonic() + 180, status="waiting")
+        return render("netease.html", "Netease Music login", "settings", attempt=attempt,
+                      qr_image=base64.b64encode(image.getvalue()).decode("ascii"))
     except Exception as exc:
-        logger.exception("Netease QR login failed")
-        raise HTTPException(500, str(exc)) from exc
-    return RedirectResponse("/settings", status_code=303)
+        logger.exception("Netease QR login could not start")
+        raise HTTPException(502, "Could not create Netease QR code. Try again and check the service logs.") from exc
+
+
+@app.post("/setup/netease/{attempt}/check")
+def netease_login_status(attempt: str) -> dict:
+    with _netease_login_lock:
+        login = _netease_login
+        if login.get("id") != attempt:
+            raise HTTPException(410, "This QR login is no longer active. Start a new login.")
+        if login["status"] in {"authorized", "expired", "failed"}:
+            return {"status": login["status"]}
+        if time.monotonic() >= login["expires"]:
+            login.update(status="expired", client=None)
+            return {"status": "expired"}
+        try:
+            code = login["client"].check_login_qr(login["key"])
+            if code == 803:
+                with runtime._credential_lock:
+                    data = runtime.settings.load()
+                    data["netease"]["session"] = login["client"].session()
+                    runtime.settings.save(data)
+                runtime.rebuild()
+                login.update(status="authorized", client=None)
+            elif code == 800:
+                login.update(status="expired", client=None)
+            else:
+                login["status"] = "scanned" if code == 802 else "waiting"
+        except Exception:
+            logger.exception("Netease QR login failed")
+            login.update(status="failed", client=None)
+        return {"status": login["status"]}

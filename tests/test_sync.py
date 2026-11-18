@@ -447,3 +447,103 @@ def test_waiting_playlist_starts_after_active_playlist_finishes(tmp_path):
     assert wait_for_run(service.db, first.run_id)['status'] == 'success'
     assert wait_for_run(service.db, second.run_id)['status'] == 'success'
     assert calls == ['first', 'second']
+
+
+def test_background_correction_failure_is_recorded_without_changing_mapping(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    db = SyncDatabase(tmp_path / 'correction-failure.sqlite3')
+    db.save_mapping('pair', 'apple-1', 'old', 'incorrect')
+    def fail(*args):
+        raise RuntimeError('Netease temporarily unavailable')
+    netease.song = fail
+    service = SyncService(db, apple, netease)
+    run_id = service.correct(SyncPair('pair', 'Pair', 'apple', 'netease'), 'apple-1', 'new', background=True)
+    run = wait_for_run(db, run_id)
+    assert run['status'] == 'failed'
+    assert 'Netease temporarily unavailable' in run['error']
+    assert db.mapping('pair', 'apple-1')['dest_id'] == 'old'
+    assert service._locks['pair'].acquire(blocking=False)
+    service._locks['pair'].release()
+
+
+def test_background_correction_can_stop_and_revert_added_song(tmp_path):
+    import threading
+    apple, netease = FakeApple(), FakeNetease()
+    db = SyncDatabase(tmp_path / 'correction-stop.sqlite3')
+    db.save_mapping('pair', 'apple-1', 'old', 'incorrect')
+    netease.items = [Candidate('old', 'Old', 'Artist')]
+    service = SyncService(db, apple, netease)
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    entered, release = threading.Event(), threading.Event()
+    original = netease.add
+    def add(*args):
+        original(*args)
+        entered.set()
+        assert release.wait(5)
+    netease.add = add
+    try:
+        run_id = service.correct(pair, 'apple-1', 'new', background=True)
+        assert entered.wait(2)
+        service.stop_and_revert(pair, run_id)
+    finally:
+        release.set()
+    assert wait_for_run(db, run_id)['status'] == 'cancelled'
+    assert {song.id for song in netease.items} == {'old'}
+    assert db.mapping('pair', 'apple-1')['dest_id'] == 'old'
+
+
+def test_background_correction_waits_for_other_playlist_without_provider_calls(tmp_path):
+    import threading
+    apple, netease = FakeApple(), FakeNetease()
+    db = SyncDatabase(tmp_path / 'correction-queued.sqlite3')
+    db.save_mapping('pair', 'apple-1', None, 'ambiguous')
+    service = SyncService(db, apple, netease)
+    entered = threading.Event()
+    original = netease.song
+    def song(song_id):
+        entered.set()
+        return original(song_id)
+    netease.song = song
+    with service._sync_lock:
+        run_id = service.correct(SyncPair('pair', 'Pair', 'apple', 'netease'), 'apple-1', 'new', background=True)
+        assert not entered.wait(0.1)
+        assert db.run(run_id)['status'] == 'running'
+    assert wait_for_run(db, run_id)['status'] == 'success'
+    assert entered.is_set()
+    assert db.mapping('pair', 'apple-1')['dest_id'] == 'new'
+
+
+def test_unavailable_placeholder_skips_scans_and_can_be_corrected_later(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    db = SyncDatabase(tmp_path / 'unavailable.sqlite3')
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    db.set_source(pair.id, apple.source)
+    db.save_mapping(pair.id, apple.source.id, None, 'ambiguous')
+    netease.items = [Candidate('existing', 'Existing', 'Artist')]
+    service = SyncService(db, apple, netease)
+    run_id = service.correct(pair, apple.source.id, None)
+    assert db.run(run_id)['status'] == 'success'
+    mapping = db.mapping(pair.id, apple.source.id)
+    assert mapping['state'] == 'ignored' and mapping['dest_id'] is None and mapping['manual']
+    for _ in range(2):
+        result = service.sync(pair)
+        assert result.status == 'success' and result.skipped == 1
+        assert result.added == result.failed == result.ambiguous == 0
+    assert apple.metadata_calls == netease.search_calls == netease.add_calls == 0
+    assert [song.id for song in netease.items] == ['existing']
+    service.correct(pair, apple.source.id, 'new')
+    assert db.mapping(pair.id, apple.source.id)['state'] == 'synced'
+    assert db.mapping(pair.id, apple.source.id)['dest_id'] == 'new'
+    assert service.sync(pair).skipped == 1
+
+
+def test_unavailable_placeholder_removed_when_source_disappears(tmp_path):
+    apple, netease = FakeApple(), FakeNetease()
+    db = SyncDatabase(tmp_path / 'unavailable-removed.sqlite3')
+    pair = SyncPair('pair', 'Pair', 'apple', 'netease')
+    db.save_mapping(pair.id, apple.source.id, None, 'ignored', manual=True)
+    db.set_initial_done(pair.id, True)
+    apple.tracks = lambda playlist: []
+    service = SyncService(db, apple, netease)
+    assert service.sync(pair).status == 'success'
+    assert db.mapping(pair.id, apple.source.id) is None

@@ -299,28 +299,40 @@ class PyncmClient:
     def session(self) -> dict[str, Any]:
         return self._session.dump()
 
-    def login_qr(self) -> dict[str, Any]:
-        """Run pyncm's interactive QR flow and return the persisted cookie/session."""
-        from pyncm.apis import login as login_api  # type: ignore
-        import time
-        import qrcode
+    def start_login_qr(self) -> tuple[str, str]:
+        from pyncm.apis import login as login_api
 
         unikey = login_api.LoginQrcodeUnikey(session=self._session)["unikey"]
-        url = login_api.GetLoginQRCodeUrl(unikey, session=self._session)
+        return unikey, login_api.GetLoginQRCodeUrl(unikey, session=self._session)
+
+    def check_login_qr(self, unikey: str) -> int:
+        from pyncm.apis import login as login_api
+
+        response = login_api.LoginQrcodeCheck(unikey, session=self._session)
+        code = response.get("code")
+        if code == 803:
+            status = login_api.GetCurrentLoginStatus(session=self._session)
+            self.pyncm.WriteLoginInfo(status, self._session)
+        elif code not in (800, 801, 802):
+            raise RuntimeError(f"Netease QR login failed ({code}): {response.get('message', 'QR rejected')}")
+        return code
+
+    def login_qr(self) -> dict[str, Any]:
+        """Interactive terminal setup; the dashboard uses the same steps separately."""
+        import qrcode
+
+        unikey, url = self.start_login_qr()
         qr = qrcode.QRCode()
         qr.add_data(url)
         qr.print_ascii(invert=True)
         print("Scan the QR code with the Netease Music app and confirm login.", flush=True)
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
-            response = login_api.LoginQrcodeCheck(unikey, session=self._session)
-            code = response.get("code")
+            code = self.check_login_qr(unikey)
             if code == 803:
-                status = login_api.GetCurrentLoginStatus(session=self._session)
-                self.pyncm.WriteLoginInfo(status, self._session)
                 return self.session()
-            if code not in (801, 802):
-                raise RuntimeError(f"Netease QR login failed ({code}): {response.get('message', 'QR expired or rejected')}")
+            if code == 800:
+                raise RuntimeError("Netease QR code expired; run setup again for a new QR code")
             time.sleep(2)
         raise TimeoutError("Netease QR login timed out; run setup again for a new QR code")
 

@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% from 'components.html' import heading with context %}{% block content %}
+{{ heading('Netease Music login', 'Scan the QR code with the Netease Music app, then confirm login on your phone.') }}
+<section class="panel authorization-panel" id="netease-login" data-attempt="{{ attempt }}">
+<h2>Connect Netease Music</h2>
+<img src="data:image/svg+xml;base64,{{ qr_image }}" alt="Netease Music login QR code" width="256" height="256" style="max-width:100%;height:auto;background:white;padding:12px;box-sizing:border-box">
+<p id="netease-login-status" role="status" aria-live="polite">Waiting for you to scan the QR code…</p>
+<form method="post" action="/setup/netease"><button class="button">Generate new QR code</button></form>
+<p><a class="text-link" href="/settings">Back to settings</a></p>
+</section>
+<script src="/static/netease_auth.js" defer></script>
+{% endblock %}

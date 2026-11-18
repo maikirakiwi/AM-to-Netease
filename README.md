@@ -30,7 +30,9 @@ docker compose up -d
 
 ## 匹配不对怎么办？
 
-打开 **Needs attention**，点击 **Review**，粘贴正确的网易云歌曲链接，再点击 **Apply correction**。如果已经同步的歌曲有误，先在歌曲详情中点击 **Flag as incorrect**，再手动关联。后续同步会保留手动选择。
+打开 **Needs attention**，点击 **Review**，粘贴正确的网易云歌曲链接，再点击 **Apply correction**。如果已经同步的歌曲有误，先在歌曲详情中点击 **Flag as incorrect**，再手动关联。纠错在后台执行，不会阻塞网页；页面显示状态，可继续使用其他功能。后续同步会保留手动选择。
+
+如果网易云没有这首歌，选择 **Not available on Netease — skip this track** 保存占位关联，后续扫描会跳过它。可在 **Song library → Not available** 找回，之后填写歌曲链接即可恢复同步。
 
 同步在后台运行，可以查看进度；运行中的任务也可以使用 **Stop & revert changes** 停止并撤销本次修改。
 

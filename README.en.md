@@ -30,7 +30,9 @@ The default schedule is **03:00 Asia/Shanghai every day**. Change the time and t
 
 ## Fix a song match
 
-Open **Needs attention**, select **Review**, paste the correct Netease song URL, and select **Apply correction**. For an incorrect song already marked as synced, select **Flag as incorrect** in its details first, then apply the correction. Future syncs preserve your manual choice.
+Open **Needs attention**, select **Review**, paste the correct Netease song URL, and select **Apply correction**. For an incorrect song already marked as synced, select **Flag as incorrect** in its details first, then apply the correction. Corrections run in the background with a status message, so you can keep using the dashboard. Future syncs preserve your manual choice.
+
+If a song is unavailable on Netease, select **Not available on Netease — skip this track** to save a local placeholder and skip future scans. Find it under **Song library → Not available** and apply a song URL later to resume syncing.
 
 Syncs run in the background with progress tracking. Use **Stop & revert changes** to stop a running sync and undo that run’s changes.
 
